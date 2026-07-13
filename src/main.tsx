@@ -8,3 +8,17 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
+
+// Register service worker for offline support (PWA)
+if ('serviceWorker' in navigator && process.env.NODE_ENV === 'production') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((reg) => {
+        console.log('Service Worker registered successfully with scope:', reg.scope);
+      })
+      .catch((err) => {
+        console.warn('Service Worker registration failed:', err);
+      });
+  });
+}
+

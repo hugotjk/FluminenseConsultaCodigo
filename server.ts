@@ -90,77 +90,85 @@ app.post("/api/image-config", (req, res) => {
 // Core database synchronization function from Google Drive
 async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
   const folderId = "1Fsec9Mlh1-ktpuIN3DOOC_A0IakfWd13";
-  console.log("Fetching public Google Drive folder page...");
-  const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
-  const folderRes = await fetch(folderUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    }
-  });
-
-  if (!folderRes.ok) {
-    throw new Error(`Falha ao acessar a pasta pública do Google Drive: ${folderRes.statusText}`);
-  }
-
-  const html = await folderRes.text();
-  const pattern = /window\['_DRIVE_ivd'\]\s*=\s*'([^']*)'/;
-  const match = html.match(pattern);
-
+  const defaultFileId = "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
   let targetFileId = "";
   let targetFileName = "Base Maraca Flu.xlsx";
 
-  if (match) {
-    const hexEncoded = match[1];
-    const decoded = hexEncoded.replace(/\\x([0-9a-fA-F]{2})/g, (m, g1) => {
-      return String.fromCharCode(parseInt(g1, 16));
+  console.log("Fetching public Google Drive folder page...");
+  try {
+    const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+    const folderRes = await fetch(folderUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+      }
     });
-    try {
-      const parsed = JSON.parse(decoded);
-      if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
-        const files = parsed[0];
-        // Filter files whose name contains 'Base Maraca Flu' and is an xlsx
-        const matchedFiles = files.filter((f: any) => {
-          const name = String(f[2] || "");
-          return name.includes("Base Maraca Flu") && name.endsWith(".xlsx");
-        });
 
-        if (matchedFiles.length > 0) {
-          // Sort by modified time (index 10) descending to get the newest
-          matchedFiles.sort((a: any, b: any) => {
-            const timeA = a[10] || 0;
-            const timeB = b[10] || 0;
-            return timeB - timeA;
-          });
-          targetFileId = matchedFiles[0][0];
-          targetFileName = matchedFiles[0][2];
-          console.log(`Found file in public folder: ${targetFileName} (ID: ${targetFileId})`);
+    if (folderRes.ok) {
+      const html = await folderRes.text();
+      const pattern = /window\['_DRIVE_ivd'\]\s*=\s*'([^']*)'/;
+      const match = html.match(pattern);
+
+      if (match) {
+        const hexEncoded = match[1];
+        const decoded = hexEncoded.replace(/\\x([0-9a-fA-F]{2})/g, (m, g1) => {
+          return String.fromCharCode(parseInt(g1, 16));
+        });
+        try {
+          const parsed = JSON.parse(decoded);
+          if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
+            const files = parsed[0];
+            // Filter files whose name contains 'Base Maraca Flu' and is an xlsx
+            const matchedFiles = files.filter((f: any) => {
+              const name = String(f[2] || "");
+              return name.includes("Base Maraca Flu") && name.endsWith(".xlsx");
+            });
+
+            if (matchedFiles.length > 0) {
+              // Sort by modified time (index 10) descending to get the newest
+              matchedFiles.sort((a: any, b: any) => {
+                const timeA = a[10] || 0;
+                const timeB = b[10] || 0;
+                return timeB - timeA;
+              });
+              targetFileId = matchedFiles[0][0];
+              targetFileName = matchedFiles[0][2];
+              console.log(`Found file in public folder: ${targetFileName} (ID: ${targetFileId})`);
+            }
+          }
+        } catch (parseErr) {
+          console.error("Error parsing folder data from HTML:", parseErr);
         }
       }
-    } catch (parseErr) {
-      console.error("Error parsing folder data from HTML:", parseErr);
-    }
-  }
 
-  // Fallback if scraping window['_DRIVE_ivd'] failed or couldn't find file:
-  // Try to regex parse the HTML directly for any table/list rows
-  if (!targetFileId) {
-    console.log("Attempting fallback direct regex match for file ID and name...");
-    const regexId = /data-id="([a-zA-Z0-9_-]{33})"/g;
-    const allIds: string[] = [];
-    let m;
-    while ((m = regexId.exec(html)) !== null) {
-      if (!allIds.includes(m[1]) && m[1] !== folderId) {
-        allIds.push(m[1]);
+      // Fallback if scraping window['_DRIVE_ivd'] failed or couldn't find file:
+      // Try to regex parse the HTML directly for any table/list rows
+      if (!targetFileId) {
+        console.log("Attempting fallback direct regex match for file ID and name...");
+        const regexId = /data-id="([a-zA-Z0-9_-]{33})"/g;
+        const allIds: string[] = [];
+        let m;
+        while ((m = regexId.exec(html)) !== null) {
+          if (!allIds.includes(m[1]) && m[1] !== folderId) {
+            allIds.push(m[1]);
+          }
+        }
+        if (allIds.length > 0) {
+          targetFileId = allIds[0];
+          console.log(`Fallback picked first found file ID: ${targetFileId}`);
+        }
       }
+    } else {
+      console.warn(`Google Drive folder page returned status ${folderRes.status}. Falling back to default.`);
     }
-    if (allIds.length > 0) {
-      targetFileId = allIds[0];
-      console.log(`Fallback picked first found file ID: ${targetFileId}`);
-    }
+  } catch (err) {
+    console.warn("Failed to scrape folder page (this is normal in Vercel/serverless due to rate limits):", err);
   }
 
+  // Final fallback to the proven file ID
   if (!targetFileId) {
-    throw new Error("Nenhum arquivo 'Base Maraca Flu' encontrado na pasta do Google Drive informada.");
+    console.log(`Using default hardcoded file ID: ${defaultFileId}`);
+    targetFileId = defaultFileId;
+    targetFileName = "Base Maraca Flu.xlsx (Direto)";
   }
 
   // 2. Download the file contents

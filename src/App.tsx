@@ -53,6 +53,22 @@ export default function App() {
     extension: "jpg",
   });
 
+  // Online / Offline Status State
+  const [isOnline, setIsOnline] = useState(typeof window !== "undefined" ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
   // 1. Initial Data Fetch
   const fetchProducts = async (autoSyncIfEmpty = true) => {
     setLoading(true);
@@ -136,6 +152,14 @@ export default function App() {
 
   // 2. Database Synchronization Handler
   const triggerSync = async (isManual = true) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (isManual) {
+        setSyncError("Sem conexão com a internet. Conecte-se para sincronizar.");
+        setTimeout(() => setSyncError(null), 4000);
+      }
+      return;
+    }
+
     setSyncing(true);
     if (isManual) {
       setSyncError(null);
@@ -412,6 +436,10 @@ export default function App() {
       <section className="bg-slate-100 border-b border-slate-200 py-3 shrink-0">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 text-xs text-slate-500">
           <div className="flex flex-wrap items-center gap-y-1 gap-x-4">
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-bold text-[10px] ${isOnline ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-amber-50 text-amber-700 border border-amber-200 animate-pulse"}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? "bg-emerald-500" : "bg-amber-500"}`} />
+              {isOnline ? "ONLINE" : "OFFLINE"}
+            </span>
             <span className="flex items-center gap-1 font-bold">
               <Database size={13} className="text-slate-400" />
               Base: <span className="text-slate-700 font-mono">{fileName || "Nenhuma carregada"}</span>
