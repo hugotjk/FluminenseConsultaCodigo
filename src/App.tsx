@@ -157,19 +157,34 @@ export default function App() {
         setSyncMessage("Tentando processamento local pelo navegador (evita limites de tempo do servidor)...");
       }
       
-      // 1. Download raw excel file using the proxy (which never times out and streams fast)
+      // 1. Download raw excel file in parallel chunks using the proxy (bypasses Vercel's 4.5MB limit)
       if (isManual) {
-        setSyncMessage("Baixando planilha do Google Drive via proxy...");
-      }
-      const response = await fetch("/api/download-excel");
-      if (!response.ok) {
-        throw new Error(`Falha no download da planilha via proxy: ${response.statusText}`);
+        setSyncMessage("Baixando planilha do Google Drive em partes de forma rápida...");
       }
       
-      const fileNameHeader = response.headers.get("X-File-Name");
+      const [resPart1, resPart2] = await Promise.all([
+        fetch("/api/download-excel?part=1"),
+        fetch("/api/download-excel?part=2")
+      ]);
+      
+      if (!resPart1.ok || !resPart2.ok) {
+        throw new Error(`Falha no download das partes da planilha via proxy: ${resPart1.statusText || resPart2.statusText}`);
+      }
+      
+      const fileNameHeader = resPart1.headers.get("X-File-Name");
       const resolvedFileName = fileNameHeader ? decodeURIComponent(fileNameHeader) : "Base Maraca Flu.xlsx";
       
-      const arrayBuffer = await response.arrayBuffer();
+      const [abPart1, abPart2] = await Promise.all([
+        resPart1.arrayBuffer(),
+        resPart2.arrayBuffer()
+      ]);
+      
+      // Reconstruct the full file buffer
+      const combined = new Uint8Array(abPart1.byteLength + abPart2.byteLength);
+      combined.set(new Uint8Array(abPart1), 0);
+      combined.set(new Uint8Array(abPart2), abPart1.byteLength);
+      
+      const arrayBuffer = combined.buffer;
       
       if (isManual) {
         setSyncMessage("Lendo planilha de 100 mil linhas no navegador...");

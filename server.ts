@@ -438,22 +438,35 @@ app.post("/api/sync", async (req, res) => {
 // Proxy endpoint to stream raw XLSX file to the client for frontend parsing fallback (bypasses CORS and server-side timeouts)
 app.get("/api/download-excel", async (req, res) => {
   try {
+    const part = req.query.part ? parseInt(req.query.part as string, 10) : 0;
     const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
     const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
-    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl}`);
+    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl} (Part: ${part})`);
     
     const driveRes = await fetch(downloadUrl);
     if (!driveRes.ok) {
       throw new Error(`Google Drive retornou status ${driveRes.status}: ${driveRes.statusText}`);
     }
 
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(targetFileName)}"`);
     res.setHeader("X-File-Name", encodeURIComponent(targetFileName));
+    res.setHeader("Content-Type", "application/octet-stream");
 
     const arrayBuffer = await driveRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    return res.send(buffer);
+
+    if (part === 1) {
+      // First 3MB
+      const chunk = buffer.subarray(0, 3000000);
+      return res.send(chunk);
+    } else if (part === 2) {
+      // Remaining bytes
+      const chunk = buffer.subarray(3000000);
+      return res.send(chunk);
+    } else {
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(targetFileName)}"`);
+      return res.send(buffer);
+    }
   } catch (err: any) {
     console.error("Proxy Download Error:", err);
     return res.status(500).json({ error: err.message || "Erro ao baixar arquivo do Google Drive" });
