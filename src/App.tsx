@@ -57,6 +57,27 @@ export default function App() {
   const fetchProducts = async (autoSyncIfEmpty = true) => {
     setLoading(true);
     try {
+      // Try local storage cache first for instant/offline loading
+      const cachedProducts = localStorage.getItem("maraca_flu_products");
+      const cachedLastUpdated = localStorage.getItem("maraca_flu_last_updated");
+      const cachedFileName = localStorage.getItem("maraca_flu_file_name");
+      const cachedTotalCount = localStorage.getItem("maraca_flu_total_count");
+
+      if (cachedProducts) {
+        try {
+          const parsed = JSON.parse(cachedProducts);
+          setProducts(parsed);
+          setLastUpdated(cachedLastUpdated);
+          setFileName(cachedFileName);
+          setTotalCount(cachedTotalCount ? parseInt(cachedTotalCount, 10) : parsed.length);
+          setLoading(false);
+          return;
+        } catch (e) {
+          console.error("Failed to parse cached products, refetching...", e);
+        }
+      }
+
+      // Fallback to fetch from backend if localStorage is empty
       const res = await fetch("/api/products");
       if (res.ok) {
         const data = await res.json();
@@ -66,10 +87,18 @@ export default function App() {
         setFileName(data.fileName || null);
         setTotalCount(data.totalCount || 0);
 
+        // Store in localStorage for future offline access
+        if (productsList.length > 0) {
+          localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+          if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
+          if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
+          localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
+        }
+
         // Auto-sync on load if the cache is completely empty
         if (autoSyncIfEmpty && productsList.length === 0) {
           console.log("Database empty. Auto-triggering sync...");
-          triggerSync();
+          triggerSync(false);
         }
       }
     } catch (err) {
@@ -81,10 +110,16 @@ export default function App() {
 
   const fetchImageConfig = async () => {
     try {
+      const cachedConfig = localStorage.getItem("maraca_flu_image_config");
+      if (cachedConfig) {
+        setImageConfig(JSON.parse(cachedConfig));
+      }
+
       const res = await fetch("/api/image-config");
       if (res.ok) {
         const config = await res.json();
         setImageConfig(config);
+        localStorage.setItem("maraca_flu_image_config", JSON.stringify(config));
       }
     } catch (err) {
       console.error("Erro ao carregar configuração de imagem:", err);
@@ -94,16 +129,18 @@ export default function App() {
   useEffect(() => {
     // Load products from cache first, then automatically trigger synchronization on app load
     fetchProducts(false).then(() => {
-      triggerSync();
+      triggerSync(false); // Silently sync on startup
     });
     fetchImageConfig();
   }, []);
 
   // 2. Database Synchronization Handler
-  const triggerSync = async () => {
+  const triggerSync = async (isManual = true) => {
     setSyncing(true);
-    setSyncError(null);
-    setSyncMessage("Conectando ao Google Drive...");
+    if (isManual) {
+      setSyncError(null);
+      setSyncMessage("Conectando ao Google Drive...");
+    }
 
     try {
       const res = await fetch("/api/sync", {
@@ -112,18 +149,32 @@ export default function App() {
 
       const data = await res.json();
       if (res.ok && data.success) {
-        setSyncMessage("Sincronização concluída com sucesso!");
-        // Refresh catalog after sync
-        await fetchProducts(false);
-        setTimeout(() => setSyncMessage(null), 3000);
-      } else {
+        const productsList = data.products || [];
+        setProducts(productsList);
+        setLastUpdated(data.lastUpdated || null);
+        setFileName(data.fileName || null);
+        setTotalCount(data.totalCount || 0);
+
+        // Always update cache
+        localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+        if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
+        if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
+        localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
+
+        if (isManual) {
+          setSyncMessage("Sincronização concluída com sucesso!");
+          setTimeout(() => setSyncMessage(null), 3000);
+        }
+      } else if (isManual) {
         setSyncError(data.error || "Ocorreu um erro durante a sincronização.");
         setSyncMessage(null);
       }
     } catch (err: any) {
       console.error("Erro ao sincronizar:", err);
-      setSyncError("Erro de comunicação com o servidor de sincronização.");
-      setSyncMessage(null);
+      if (isManual) {
+        setSyncError("Erro de comunicação com o servidor de sincronização.");
+        setSyncMessage(null);
+      }
     } finally {
       setSyncing(false);
     }
@@ -132,19 +183,20 @@ export default function App() {
   // 3. Save Image Config
   const handleSaveImageConfig = async (newConfig: ImageConfig) => {
     try {
-      const res = await fetch("/api/image-config", {
+      // Save locally first for instant updates
+      localStorage.setItem("maraca_flu_image_config", JSON.stringify(newConfig));
+      setImageConfig(newConfig);
+
+      // Best effort update on backend
+      await fetch("/api/image-config", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify(newConfig),
       });
-      if (res.ok) {
-        setImageConfig(newConfig);
-      }
     } catch (err) {
-      console.error("Erro ao salvar imagens:", err);
-      throw err;
+      console.error("Erro ao salvar imagens no backend (salvo localmente):", err);
     }
   };
 

@@ -12,7 +12,11 @@ app.use(express.json());
 // Ensure data directory exists
 const DATA_DIR = path.join(process.cwd(), "data");
 if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (e) {
+    console.warn("Could not create data directory (normal in read-only environments):", e);
+  }
 }
 
 const PRODUCTS_FILE = path.join(DATA_DIR, "products.json");
@@ -71,7 +75,11 @@ app.post("/api/image-config", (req, res) => {
       matchField: matchField || "referencia",
       extension: extension || "jpg",
     };
-    fs.writeFileSync(IMAGE_CONFIG_FILE, JSON.stringify(config, null, 2));
+    try {
+      fs.writeFileSync(IMAGE_CONFIG_FILE, JSON.stringify(config, null, 2));
+    } catch (writeErr) {
+      console.warn("Failed to write image config to disk (normal on serverless/Vercel):", writeErr);
+    }
     res.json({ success: true, config });
   } catch (err: any) {
     console.error("Error saving image config:", err);
@@ -80,7 +88,7 @@ app.post("/api/image-config", (req, res) => {
 });
 
 // Core database synchronization function from Google Drive
-async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number }> {
+async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
   const folderId = "1Fsec9Mlh1-ktpuIN3DOOC_A0IakfWd13";
   console.log("Fetching public Google Drive folder page...");
   const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
@@ -372,15 +380,20 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
     totalCount: products.length,
   };
 
-  // Save to disk
-  fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(syncResult, null, 2));
-  console.log(`Database synchronized successfully! Total products grouped: ${products.length}`);
+  // Save to disk (best effort cache)
+  try {
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(syncResult, null, 2));
+    console.log(`Database synchronized successfully! Total products grouped: ${products.length}`);
+  } catch (err) {
+    console.warn("Could not write products cache to disk (this is normal in serverless/Vercel):", err);
+  }
 
   return {
     success: true,
     lastUpdated: syncResult.lastUpdated,
     fileName: syncResult.fileName,
     totalCount: syncResult.totalCount,
+    products: syncResult.products, // Return products so client can store them in localStorage
   };
 }
 
@@ -413,24 +426,30 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
 
-    // Initial background sync on boot
-    console.log("Triggering initial background sync on server boot...");
-    syncDatabase()
-      .then((res) => console.log(`Initial boot sync completed. Grouped products count: ${res.totalCount}`))
-      .catch((err) => console.error("Initial boot sync failed:", err));
-
-    // Scheduled background sync every 4 hours (4 * 60 * 60 * 1000 ms)
-    const FOUR_HOURS = 4 * 60 * 60 * 1000;
-    setInterval(() => {
-      console.log("Starting scheduled 4-hour background database sync...");
+      // Initial background sync on boot
+      console.log("Triggering initial background sync on server boot...");
       syncDatabase()
-        .then((res) => console.log(`Scheduled background sync completed successfully. Count: ${res.totalCount}`))
-        .catch((err) => console.error("Scheduled background sync failed:", err));
-    }, FOUR_HOURS);
-  });
+        .then((res) => console.log(`Initial boot sync completed. Grouped products count: ${res.totalCount}`))
+        .catch((err) => console.error("Initial boot sync failed:", err));
+
+      // Scheduled background sync every 4 hours (4 * 60 * 60 * 1000 ms)
+      const FOUR_HOURS = 4 * 60 * 60 * 1000;
+      setInterval(() => {
+        console.log("Starting scheduled 4-hour background database sync...");
+        syncDatabase()
+          .then((res) => console.log(`Scheduled background sync completed successfully. Count: ${res.totalCount}`))
+          .catch((err) => console.error("Scheduled background sync failed:", err));
+      }, FOUR_HOURS);
+    });
+  } else {
+    console.log("Running in serverless mode (Vercel). Server listening and initial sync background tasks are skipped.");
+  }
 }
 
 startServer();
+
+export default app;
