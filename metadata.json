@@ -1,0 +1,6 @@
+{
+  "name": "Consulta de Produtos - Maraca Flu",
+  "description": "Aplicativo para consulta e filtros inteligentes de produtos do Fluminense, sincronizado diariamente com planilha do Google Drive.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
