@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, ChangeEvent } from "react";
 import {
   Search,
   RefreshCw,
@@ -14,6 +14,7 @@ import {
   Info,
   Database,
   Grid,
+  Upload,
 } from "lucide-react";
 import { GroupedProduct, ImageConfig } from "./types";
 import ProductCard from "./components/ProductCard";
@@ -429,6 +430,268 @@ export default function App() {
     }
   };
 
+  const handleLocalFileUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    
+    setSyncing(true);
+    setSyncError(null);
+    setSyncMessage("Lendo arquivo do seu computador...");
+    
+    try {
+      const reader = new FileReader();
+      const loadPromise = new Promise<ArrayBuffer>((resolve, reject) => {
+        reader.onload = (event) => {
+          if (event.target?.result) {
+            resolve(event.target.result as ArrayBuffer);
+          } else {
+            reject(new Error("Erro ao ler conteúdo do arquivo."));
+          }
+        };
+        reader.onerror = () => reject(new Error("Erro na leitura do arquivo local."));
+        reader.readAsArrayBuffer(file);
+      });
+      
+      const arrayBuffer = await loadPromise;
+      setSyncMessage("Lendo dados da planilha...");
+      
+      const XLSX = await import("xlsx");
+      
+      const metaWorkbook = XLSX.read(arrayBuffer, { type: "array", bookSheets: true });
+      if (metaWorkbook.SheetNames.length === 0) {
+        throw new Error("O arquivo Excel carregado está vazio.");
+      }
+      
+      const sheetName = metaWorkbook.SheetNames[0];
+      setSyncMessage(`Processando aba: ${sheetName}...`);
+      
+      const workbook = XLSX.read(arrayBuffer, {
+        type: "array",
+        sheets: [sheetName],
+        cellFormula: false,
+        cellHTML: false,
+        cellNF: false,
+        cellStyles: false,
+        cellText: false,
+      });
+      
+      const worksheet = workbook.Sheets[sheetName];
+      const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, {
+        header: 1,
+        raw: true,
+      });
+      
+      if (rawRows.length === 0) {
+        throw new Error("Nenhum dado encontrado na primeira aba.");
+      }
+      
+      setSyncMessage("Organizando produtos por Referência e Cor (processamento local)...");
+      
+      // Replicate the exact grouping logic
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+        const r = rawRows[i];
+        if (r && r.some(cell => /referencia|referência|descri|código|barra/i.test(String(cell)))) {
+          headerIdx = i;
+          break;
+        }
+      }
+      
+      const colMap = {
+        ord: 0,
+        codigo_barra: 1,
+        cor: 2,
+        descricao: 3,
+        ean: 4,
+        fornecedor: 5,
+        modelo: 6,
+        linha: 7,
+        grupo: 8,
+        preco_varejo: 9,
+        referencia: 10,
+        referencia_fornecedor: 11,
+        tamanho: 12,
+        venda: 13,
+        maracana: 14,
+      };
+      
+      if (headerIdx !== -1) {
+        const headers = rawRows[headerIdx];
+        const findCol = (regex: RegExp) =>
+          headers.findIndex((h) =>
+            regex.test(
+              String(h || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+            )
+          );
+          
+        const ord = findCol(/ord/i);
+        const cod = findCol(/codigo.*barra|cod.*barra|barras|cod_barra/i);
+        const cor = findCol(/cor/i);
+        const desc = findCol(/desc/i);
+        const ean = findCol(/ean/i);
+        const forn = findCol(/fornecedor|forn/i);
+        const mod = findCol(/modelo|mod/i);
+        const lin = findCol(/linha/i);
+        const grup = findCol(/grupo/i);
+        const prec = findCol(/preco.*varejo|preco|valor|varejo/i);
+        const ref = findCol(/^ref(erencia)?$/i);
+        const ref_forn = findCol(/ref.*forn|fornecedor.*ref|ref_fornecedor/i);
+        const tam = findCol(/tamanho|tam/i);
+        const vend = findCol(/^venda$/i);
+        const mara = findCol(/maracana/i);
+        
+        if (ord !== -1) colMap.ord = ord;
+        if (cod !== -1) colMap.codigo_barra = cod;
+        if (cor !== -1) colMap.cor = cor;
+        if (desc !== -1) colMap.descricao = desc;
+        if (ean !== -1) colMap.ean = ean;
+        if (forn !== -1) colMap.fornecedor = forn;
+        if (lin !== -1) colMap.linha = lin;
+        if (grup !== -1) colMap.grupo = grup;
+        if (prec !== -1) colMap.preco_varejo = prec;
+        if (ref !== -1) colMap.referencia = ref;
+        if (ref_forn !== -1) colMap.referencia_fornecedor = ref_forn;
+        if (tam !== -1) colMap.tamanho = tam;
+        if (vend !== -1) colMap.venda = vend;
+        if (mod !== -1) colMap.modelo = mod;
+        if (mara !== -1) colMap.maracana = mara;
+      }
+      
+      const startRow = headerIdx !== -1 ? headerIdx + 1 : 0;
+      const groupMap = new Map<string, GroupedProduct>();
+      
+      for (let i = startRow; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!row || row.length === 0) continue;
+        
+        const ref = String(row[colMap.referencia] || "").trim();
+        if (!ref || ref === "undefined" || /referencia/i.test(ref)) {
+          continue;
+        }
+        
+        const cor = String(row[colMap.cor] || "").trim() || "ÚNICA";
+        const desc = String(row[colMap.descricao] || "").trim();
+        const ean = String(row[colMap.ean] || "").trim();
+        const codBarra = String(row[colMap.codigo_barra] || "").trim();
+        const fornecedor = String(row[colMap.fornecedor] || "").trim() || "OUTROS";
+        const linha = String(row[colMap.linha] || "").trim() || "GERAL";
+        const grupo = String(row[colMap.grupo] || "").trim() || "GERAL";
+        const refForn = String(row[colMap.referencia_fornecedor] || "").trim();
+        
+        // Price parsing
+        const precoRaw = row[colMap.preco_varejo];
+        let preco = 0;
+        if (typeof precoRaw === "number") {
+          preco = precoRaw;
+        } else if (precoRaw) {
+          preco = parseFloat(
+            String(precoRaw)
+              .replace("R$", "")
+              .replace(/\s/g, "")
+              .replace(/\./g, "")
+              .replace(",", ".")
+          );
+          if (isNaN(preco)) preco = 0;
+        }
+        
+        // Sales parsing
+        const vendaRaw = row[colMap.venda];
+        let venda = 0;
+        if (typeof vendaRaw === "number") {
+          venda = Math.round(vendaRaw);
+        } else if (vendaRaw) {
+          venda = parseInt(String(vendaRaw).replace(/[^\d-]/g, ""), 10);
+          if (isNaN(venda)) venda = 0;
+        }
+        
+        // Maracana sales parsing
+        const maracanaRaw = colMap.maracana !== -1 ? row[colMap.maracana] : undefined;
+        let maracanaVenda = 0;
+        if (typeof maracanaRaw === "number") {
+          maracanaVenda = Math.round(maracanaRaw);
+        } else if (maracanaRaw) {
+          maracanaVenda = parseInt(String(maracanaRaw).replace(/[^\d-]/g, ""), 10);
+          if (isNaN(maracanaVenda)) maracanaVenda = 0;
+        }
+        
+        const tamanho = String(row[colMap.tamanho] || "").trim() || "U";
+        
+        let modelo = "";
+        if (colMap.modelo !== -1) {
+          modelo = String(row[colMap.modelo] || "").trim();
+        }
+        if (!modelo) {
+          modelo = linha || "PADRÃO";
+        }
+        
+        const key = `${ref}_${cor}`.toUpperCase();
+        
+        let product = groupMap.get(key);
+        if (!product) {
+          product = {
+            referencia: ref,
+            cor,
+            descricao: desc,
+            fornecedor,
+            modelo,
+            linha,
+            grupo,
+            preco_varejo: preco,
+            referencia_fornecedor: refForn,
+            total_vendas: 0,
+            total_vendas_maracana: 0,
+            variations: [],
+          };
+          groupMap.set(key, product);
+        }
+        
+        product.total_vendas += venda;
+        product.total_vendas_maracana += maracanaVenda;
+        product.variations.push({
+          codigo_barra: codBarra,
+          ean,
+          tamanho,
+          venda,
+          venda_maracana: maracanaVenda,
+        });
+        
+        if (desc && desc.length > product.descricao.length) {
+          product.descricao = desc;
+        }
+      }
+      
+      const productsList = Array.from(groupMap.values()).sort((a, b) => b.total_vendas - a.total_vendas);
+      const nowStr = new Date().toISOString();
+      const userFileName = file.name;
+      
+      // Update state
+      setProducts(productsList);
+      setLastUpdated(nowStr);
+      setFileName(userFileName);
+      setTotalCount(productsList.length);
+      
+      // Save locally
+      localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+      localStorage.setItem("maraca_flu_last_updated", nowStr);
+      localStorage.setItem("maraca_flu_file_name", userFileName);
+      localStorage.setItem("maraca_flu_total_count", String(productsList.length));
+      
+      setSyncMessage("Planilha carregada e processada com sucesso!");
+      setTimeout(() => setSyncMessage(null), 3000);
+    } catch (err: any) {
+      console.error("Erro no processamento do arquivo local:", err);
+      setSyncError(err.message || "Erro ao processar o arquivo Excel selecionado.");
+      setSyncMessage(null);
+    } finally {
+      setSyncing(false);
+      // Reset input value so same file can be selected again
+      e.target.value = "";
+    }
+  };
+
   const triggerSync = async (isManual = true) => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       if (isManual) {
@@ -713,11 +976,28 @@ export default function App() {
             <button
               onClick={() => triggerSync()}
               disabled={syncing}
-              className="flex items-center gap-1.5 px-4 py-2 bg-flu-verde hover:bg-emerald-950 text-white text-xs font-bold rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.03]"
+              className="flex items-center gap-1.5 px-4 py-2 bg-flu-verde hover:bg-emerald-950 text-white text-xs font-bold rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.03] cursor-pointer"
             >
               <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
               {syncing ? "Sincronizando..." : "Sincronizar Planilha"}
             </button>
+
+            {/* Local Upload Button */}
+            <label
+              htmlFor="local-excel-file"
+              className="cursor-pointer flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition-all shadow-sm hover:scale-[1.03] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Upload size={14} />
+              Enviar do Computador
+              <input
+                type="file"
+                id="local-excel-file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                disabled={syncing}
+                onChange={handleLocalFileUpload}
+              />
+            </label>
           </div>
         </div>
       </header>
@@ -757,7 +1037,11 @@ export default function App() {
       {/* SYNC NOTIFICATIONS */}
       {syncMessage && (
         <div className="bg-emerald-500 text-white font-bold text-xs py-2 px-4 shadow-md text-center transition-all animate-fade-in flex items-center justify-center gap-1.5 z-40">
-          <Check size={14} />
+          {syncing ? (
+            <RefreshCw size={14} className="animate-spin" />
+          ) : (
+            <Check size={14} />
+          )}
           <span>{syncMessage}</span>
         </div>
       )}
