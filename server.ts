@@ -87,8 +87,8 @@ app.post("/api/image-config", (req, res) => {
   }
 });
 
-// Core database synchronization function from Google Drive
-async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
+// Helper to resolve Google Drive file ID and name
+async function getGoogleDriveFileId(): Promise<{ id: string; name: string }> {
   const folderId = "1Fsec9Mlh1-ktpuIN3DOOC_A0IakfWd13";
   const defaultFileId = "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
   let targetFileId = "";
@@ -99,7 +99,7 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
     const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
     const folderRes = await fetch(folderUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, bg=Gecko) Chrome/115.0.0.0 Safari/537.36"
       }
     });
 
@@ -141,7 +141,6 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
       }
 
       // Fallback if scraping window['_DRIVE_ivd'] failed or couldn't find file:
-      // Try to regex parse the HTML directly for any table/list rows
       if (!targetFileId) {
         console.log("Attempting fallback direct regex match for file ID and name...");
         const regexId = /data-id="([a-zA-Z0-9_-]{33})"/g;
@@ -171,6 +170,13 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
     targetFileName = "Base Maraca Flu.xlsx (Direto)";
   }
 
+  return { id: targetFileId, name: targetFileName };
+}
+
+// Core database synchronization function from Google Drive
+async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
+  const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
+
   // 2. Download the file contents
   const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
   console.log(`Downloading file from: ${downloadUrl}`);
@@ -183,18 +189,31 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
   const arrayBuffer = await downloadResponse.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
-  // 3. Parse with SheetJS (XLSX)
-  const workbook = XLSX.read(buffer, { type: "buffer" });
-  if (workbook.SheetNames.length === 0) {
-    throw new Error("The downloaded Excel file is empty.");
+  // 3. Parse with SheetJS (XLSX) - OPTIMIZED FOR LARGE DATASETS
+  const metaWorkbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
+  if (metaWorkbook.SheetNames.length === 0) {
+    throw new Error("O arquivo Excel baixado está vazio.");
   }
 
-  const sheetName = workbook.SheetNames[0];
+  const sheetName = metaWorkbook.SheetNames[0];
+  const workbook = XLSX.read(buffer, {
+    type: "buffer",
+    sheets: [sheetName],
+    cellFormula: false,
+    cellHTML: false,
+    cellNF: false,
+    cellStyles: false,
+    cellText: false,
+  });
+
   const worksheet = workbook.Sheets[sheetName];
-  const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+  const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, {
+    header: 1,
+    raw: true, // Faster raw value extraction
+  });
 
   if (rawRows.length === 0) {
-    throw new Error("No data found inside the first sheet.");
+    throw new Error("Nenhum dado encontrado na primeira planilha.");
   }
 
   // 4. Group products by Referência and Cor, sum sales
@@ -413,6 +432,31 @@ app.post("/api/sync", async (req, res) => {
   } catch (err: any) {
     console.error("Critical Sync Error:", err);
     return res.status(500).json({ error: err.message || "Erro interno durante a sincronização" });
+  }
+});
+
+// Proxy endpoint to stream raw XLSX file to the client for frontend parsing fallback (bypasses CORS and server-side timeouts)
+app.get("/api/download-excel", async (req, res) => {
+  try {
+    const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
+    const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
+    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl}`);
+    
+    const driveRes = await fetch(downloadUrl);
+    if (!driveRes.ok) {
+      throw new Error(`Google Drive retornou status ${driveRes.status}: ${driveRes.statusText}`);
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(targetFileName)}"`);
+    res.setHeader("X-File-Name", encodeURIComponent(targetFileName));
+
+    const arrayBuffer = await driveRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    return res.send(buffer);
+  } catch (err: any) {
+    console.error("Proxy Download Error:", err);
+    return res.status(500).json({ error: err.message || "Erro ao baixar arquivo do Google Drive" });
   }
 });
 

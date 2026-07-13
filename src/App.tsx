@@ -151,6 +151,269 @@ export default function App() {
   }, []);
 
   // 2. Database Synchronization Handler
+  const runClientSideSync = async (isManual: boolean): Promise<boolean> => {
+    try {
+      if (isManual) {
+        setSyncMessage("Tentando processamento local pelo navegador (evita limites de tempo do servidor)...");
+      }
+      
+      // 1. Download raw excel file using the proxy (which never times out and streams fast)
+      if (isManual) {
+        setSyncMessage("Baixando planilha do Google Drive via proxy...");
+      }
+      const response = await fetch("/api/download-excel");
+      if (!response.ok) {
+        throw new Error(`Falha no download da planilha via proxy: ${response.statusText}`);
+      }
+      
+      const fileNameHeader = response.headers.get("X-File-Name");
+      const resolvedFileName = fileNameHeader ? decodeURIComponent(fileNameHeader) : "Base Maraca Flu.xlsx";
+      
+      const arrayBuffer = await response.arrayBuffer();
+      
+      if (isManual) {
+        setSyncMessage("Lendo planilha de 100 mil linhas no navegador...");
+      }
+      
+      // 2. Dynamically import XLSX to avoid bloating the initial build bundle
+      const XLSX = await import("xlsx");
+      
+      // 3. Parse with optimized settings in client
+      const metaWorkbook = XLSX.read(arrayBuffer, { type: "array", bookSheets: true });
+      if (metaWorkbook.SheetNames.length === 0) {
+        throw new Error("O arquivo Excel baixado está vazio.");
+      }
+      
+      const sheetName = metaWorkbook.SheetNames[0];
+      const workbook = XLSX.read(arrayBuffer, {
+        type: "array",
+        sheets: [sheetName],
+        cellFormula: false,
+        cellHTML: false,
+        cellNF: false,
+        cellStyles: false,
+        cellText: false,
+      });
+      
+      const worksheet = workbook.Sheets[sheetName];
+      const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, {
+        header: 1,
+        raw: true,
+      });
+      
+      if (rawRows.length === 0) {
+        throw new Error("Nenhum dado encontrado na primeira planilha.");
+      }
+      
+      if (isManual) {
+        setSyncMessage("Processando e organizando produtos por Referência e Cor...");
+      }
+      
+      // 4. Grouping logic (replicated exactly from server)
+      let headerIdx = -1;
+      for (let i = 0; i < Math.min(15, rawRows.length); i++) {
+        const r = rawRows[i];
+        if (r && r.some(cell => /referencia|referência|descri|código|barra/i.test(String(cell)))) {
+          headerIdx = i;
+          break;
+        }
+      }
+      
+      const colMap = {
+        ord: 0,
+        codigo_barra: 1,
+        cor: 2,
+        descricao: 3,
+        ean: 4,
+        fornecedor: 5,
+        modelo: 6,
+        linha: 7,
+        grupo: 8,
+        preco_varejo: 9,
+        referencia: 10,
+        referencia_fornecedor: 11,
+        tamanho: 12,
+        venda: 13,
+        maracana: 14,
+      };
+      
+      if (headerIdx !== -1) {
+        const headers = rawRows[headerIdx];
+        const findCol = (regex: RegExp) =>
+          headers.findIndex((h) =>
+            regex.test(
+              String(h || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+            )
+          );
+          
+        const ord = findCol(/ord/i);
+        const cod = findCol(/codigo.*barra|cod.*barra|barras|cod_barra/i);
+        const cor = findCol(/cor/i);
+        const desc = findCol(/desc/i);
+        const ean = findCol(/ean/i);
+        const forn = findCol(/fornecedor|forn/i);
+        const mod = findCol(/modelo|mod/i);
+        const lin = findCol(/linha/i);
+        const grup = findCol(/grupo/i);
+        const prec = findCol(/preco.*varejo|preco|valor|varejo/i);
+        const ref = findCol(/^ref(erencia)?$/i);
+        const ref_forn = findCol(/ref.*forn|fornecedor.*ref|ref_fornecedor/i);
+        const tam = findCol(/tamanho|tam/i);
+        const vend = findCol(/^venda$/i);
+        const mara = findCol(/maracana/i);
+        
+        if (ord !== -1) colMap.ord = ord;
+        if (cod !== -1) colMap.codigo_barra = cod;
+        if (cor !== -1) colMap.cor = cor;
+        if (desc !== -1) colMap.descricao = desc;
+        if (ean !== -1) colMap.ean = ean;
+        if (forn !== -1) colMap.fornecedor = forn;
+        if (lin !== -1) colMap.linha = lin;
+        if (grup !== -1) colMap.grupo = grup;
+        if (prec !== -1) colMap.preco_varejo = prec;
+        if (ref !== -1) colMap.referencia = ref;
+        if (ref_forn !== -1) colMap.referencia_fornecedor = ref_forn;
+        if (tam !== -1) colMap.tamanho = tam;
+        if (vend !== -1) colMap.venda = vend;
+        if (mod !== -1) colMap.modelo = mod;
+        if (mara !== -1) colMap.maracana = mara;
+      }
+      
+      const startRow = headerIdx !== -1 ? headerIdx + 1 : 0;
+      const groupMap = new Map<string, GroupedProduct>();
+      
+      for (let i = startRow; i < rawRows.length; i++) {
+        const row = rawRows[i];
+        if (!row || row.length === 0) continue;
+        
+        const ref = String(row[colMap.referencia] || "").trim();
+        if (!ref || ref === "undefined" || /referencia/i.test(ref)) {
+          continue;
+        }
+        
+        const cor = String(row[colMap.cor] || "").trim() || "ÚNICA";
+        const desc = String(row[colMap.descricao] || "").trim();
+        const ean = String(row[colMap.ean] || "").trim();
+        const codBarra = String(row[colMap.codigo_barra] || "").trim();
+        const fornecedor = String(row[colMap.fornecedor] || "").trim() || "OUTROS";
+        const linha = String(row[colMap.linha] || "").trim() || "GERAL";
+        const grupo = String(row[colMap.grupo] || "").trim() || "GERAL";
+        const refForn = String(row[colMap.referencia_fornecedor] || "").trim();
+        
+        // Price parsing
+        const precoRaw = row[colMap.preco_varejo];
+        let preco = 0;
+        if (typeof precoRaw === "number") {
+          preco = precoRaw;
+        } else if (precoRaw) {
+          preco = parseFloat(
+            String(precoRaw)
+              .replace("R$", "")
+              .replace(/\s/g, "")
+              .replace(/\./g, "")
+              .replace(",", ".")
+          );
+          if (isNaN(preco)) preco = 0;
+        }
+        
+        // Sales parsing
+        const vendaRaw = row[colMap.venda];
+        let venda = 0;
+        if (typeof vendaRaw === "number") {
+          venda = Math.round(vendaRaw);
+        } else if (vendaRaw) {
+          venda = parseInt(String(vendaRaw).replace(/[^\d-]/g, ""), 10);
+          if (isNaN(venda)) venda = 0;
+        }
+        
+        // Maracana sales parsing
+        const maracanaRaw = colMap.maracana !== -1 ? row[colMap.maracana] : undefined;
+        let maracanaVenda = 0;
+        if (typeof maracanaRaw === "number") {
+          maracanaVenda = Math.round(maracanaRaw);
+        } else if (maracanaRaw) {
+          maracanaVenda = parseInt(String(maracanaRaw).replace(/[^\d-]/g, ""), 10);
+          if (isNaN(maracanaVenda)) maracanaVenda = 0;
+        }
+        
+        const tamanho = String(row[colMap.tamanho] || "").trim() || "U";
+        
+        let modelo = "";
+        if (colMap.modelo !== -1) {
+          modelo = String(row[colMap.modelo] || "").trim();
+        }
+        if (!modelo) {
+          modelo = linha || "PADRÃO";
+        }
+        
+        const key = `${ref}_${cor}`.toUpperCase();
+        
+        let product = groupMap.get(key);
+        if (!product) {
+          product = {
+            referencia: ref,
+            cor,
+            descricao: desc,
+            fornecedor,
+            modelo,
+            linha,
+            grupo,
+            preco_varejo: preco,
+            referencia_fornecedor: refForn,
+            total_vendas: 0,
+            total_vendas_maracana: 0,
+            variations: [],
+          };
+          groupMap.set(key, product);
+        }
+        
+        product.total_vendas += venda;
+        product.total_vendas_maracana += maracanaVenda;
+        product.variations.push({
+          codigo_barra: codBarra,
+          ean,
+          tamanho,
+          venda,
+          venda_maracana: maracanaVenda,
+        });
+        
+        if (desc && desc.length > product.descricao.length) {
+          product.descricao = desc;
+        }
+      }
+      
+      const productsList = Array.from(groupMap.values()).sort((a, b) => b.total_vendas - a.total_vendas);
+      const nowStr = new Date().toISOString();
+      
+      // Update state
+      setProducts(productsList);
+      setLastUpdated(nowStr);
+      setFileName(resolvedFileName);
+      setTotalCount(productsList.length);
+      
+      // Save locally
+      localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+      localStorage.setItem("maraca_flu_last_updated", nowStr);
+      localStorage.setItem("maraca_flu_file_name", resolvedFileName);
+      localStorage.setItem("maraca_flu_total_count", String(productsList.length));
+      
+      if (isManual) {
+        setSyncMessage("Sincronização concluída com sucesso pelo navegador!");
+        setTimeout(() => setSyncMessage(null), 3000);
+      }
+      return true;
+    } catch (err: any) {
+      console.error("Erro na sincronização pelo navegador:", err);
+      if (isManual) {
+        setSyncError(err.message || "Erro no processamento local da planilha.");
+        setSyncMessage(null);
+      }
+      return false;
+    }
+  };
+
   const triggerSync = async (isManual = true) => {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       if (isManual) {
@@ -163,15 +426,28 @@ export default function App() {
     setSyncing(true);
     if (isManual) {
       setSyncError(null);
-      setSyncMessage("Conectando ao Google Drive...");
+      setSyncMessage("Conectando ao servidor para sincronização...");
     }
 
     try {
+      // Set a short timeout (8s) for server sync so we fall back quickly in case of serverless timeout limits (10s)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
       const res = await fetch("/api/sync", {
         method: "POST",
+        signal: controller.signal,
+      }).catch(() => {
+        // Fetch failed or aborted (timeout/offline)
+        return { ok: false, json: async () => ({ error: "Timeout ou falha de rede" }) } as any;
       });
+      clearTimeout(timeoutId);
 
-      const data = await res.json();
+      let data: any = { success: false };
+      if (res.ok) {
+        data = await res.json();
+      }
+
       if (res.ok && data.success) {
         const productsList = data.products || [];
         setProducts(productsList);
@@ -189,16 +465,15 @@ export default function App() {
           setSyncMessage("Sincronização concluída com sucesso!");
           setTimeout(() => setSyncMessage(null), 3000);
         }
-      } else if (isManual) {
-        setSyncError(data.error || "Ocorreu um erro durante a sincronização.");
-        setSyncMessage(null);
+      } else {
+        // Server sync timed out or failed (Vercel Hobby 10s limit). Fallback to client-side.
+        console.warn("Server sync failed or timed out. Falling back to browser-side sync...");
+        await runClientSideSync(isManual);
       }
     } catch (err: any) {
-      console.error("Erro ao sincronizar:", err);
-      if (isManual) {
-        setSyncError("Erro de comunicação com o servidor de sincronização.");
-        setSyncMessage(null);
-      }
+      console.error("Erro ao sincronizar pelo servidor:", err);
+      console.warn("Falling back to browser-side sync...");
+      await runClientSideSync(isManual);
     } finally {
       setSyncing(false);
     }
