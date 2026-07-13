@@ -32,6 +32,7 @@ export default function App() {
   // App UI states
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [serverSyncing, setServerSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
 
@@ -702,57 +703,76 @@ export default function App() {
     }
 
     setSyncing(true);
+    setServerSyncing(true);
     if (isManual) {
       setSyncError(null);
-      setSyncMessage("Conectando ao servidor para sincronização...");
+      setSyncMessage("Solicitando sincronização ao servidor...");
     }
 
     try {
-      // Set a short timeout (8s) for server sync so we fall back quickly in case of serverless timeout limits (10s)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
       const res = await fetch("/api/sync", {
-        method: "POST",
-        signal: controller.signal,
-      }).catch(() => {
-        // Fetch failed or aborted (timeout/offline)
-        return { ok: false, json: async () => ({ error: "Timeout ou falha de rede" }) } as any;
+        method: "POST"
       });
-      clearTimeout(timeoutId);
 
-      let data: any = { success: false };
-      if (res.ok) {
-        data = await res.json();
+      if (!res.ok) {
+        throw new Error(`Servidor retornou status ${res.status}`);
       }
 
-      if (res.ok && data.success) {
-        const productsList = data.products || [];
-        setProducts(productsList);
-        setLastUpdated(data.lastUpdated || null);
-        setFileName(data.fileName || null);
-        setTotalCount(data.totalCount || 0);
-
-        // Always update cache
-        localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
-        if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
-        if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
-        localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
-
+      const data = await res.json();
+      if (data.success) {
         if (isManual) {
-          setSyncMessage("Sincronização concluída com sucesso!");
-          setTimeout(() => setSyncMessage(null), 3000);
+          setSyncMessage(data.message || "Sincronização em andamento no servidor...");
         }
+
+        // Start polling the server's sync status
+        const intervalId = setInterval(async () => {
+          try {
+            const statusRes = await fetch("/api/sync-status");
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              if (!statusData.isSyncing) {
+                // Background sync finished! Clear interval and fetch fresh products
+                clearInterval(intervalId);
+                setServerSyncing(false);
+                setSyncing(false);
+                
+                if (isManual) {
+                  setSyncMessage("Sincronização concluída! Atualizando produtos...");
+                }
+                
+                const prodRes = await fetch("/api/products");
+                if (prodRes.ok) {
+                  const prodData = await prodRes.json();
+                  const productsList = prodData.products || [];
+                  setProducts(productsList);
+                  setLastUpdated(prodData.lastUpdated || null);
+                  setFileName(prodData.fileName || null);
+                  setTotalCount(prodData.totalCount || 0);
+
+                  // Update client storage
+                  localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+                  if (prodData.lastUpdated) localStorage.setItem("maraca_flu_last_updated", prodData.lastUpdated);
+                  if (prodData.fileName) localStorage.setItem("maraca_flu_file_name", prodData.fileName);
+                  localStorage.setItem("maraca_flu_total_count", String(prodData.totalCount || productsList.length));
+                }
+                
+                if (isManual) {
+                  setTimeout(() => setSyncMessage(null), 3000);
+                }
+              }
+            }
+          } catch (pollErr) {
+            console.error("Erro ao verificar status de sincronização:", pollErr);
+          }
+        }, 4000);
       } else {
-        // Server sync timed out or failed (Vercel Hobby 10s limit). Fallback to client-side.
-        console.warn("Server sync failed or timed out. Falling back to browser-side sync...");
-        await runClientSideSync(isManual);
+        throw new Error(data.message || "Falha ao iniciar sincronização");
       }
     } catch (err: any) {
-      console.error("Erro ao sincronizar pelo servidor:", err);
-      console.warn("Falling back to browser-side sync...");
+      console.error("Erro ao sincronizar pelo servidor, tentando processamento local...", err);
+      // Fallback to client-side sync in case the server is offline or fails
       await runClientSideSync(isManual);
-    } finally {
+      setServerSyncing(false);
       setSyncing(false);
     }
   };

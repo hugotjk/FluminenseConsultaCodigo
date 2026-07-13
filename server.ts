@@ -1,12 +1,14 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import compression from "compression";
 import * as XLSX from "xlsx";
 import { createServer as createViteServer } from "vite";
 
 const app = express();
 const PORT = 3000;
 
+app.use(compression());
 app.use(express.json());
 
 // Ensure data directory exists
@@ -407,9 +409,9 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
     totalCount: products.length,
   };
 
-  // Save to disk (best effort cache)
+  // Save to disk (best effort cache - minified for maximum performance and minimum size)
   try {
-    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(syncResult, null, 2));
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(syncResult));
     console.log(`Database synchronized successfully! Total products grouped: ${products.length}`);
   } catch (err) {
     console.warn("Could not write products cache to disk (this is normal in serverless/Vercel):", err);
@@ -424,15 +426,46 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
   };
 }
 
-// Sync database from Google Drive without authentication
+let isSyncing = false;
+
+// Sync database from Google Drive without authentication (runs asynchronously in background to prevent timeout)
 app.post("/api/sync", async (req, res) => {
-  try {
-    const result = await syncDatabase();
-    return res.json(result);
-  } catch (err: any) {
-    console.error("Critical Sync Error:", err);
-    return res.status(500).json({ error: err.message || "Erro interno durante a sincronização" });
+  if (isSyncing) {
+    return res.json({
+      success: true,
+      status: "syncing",
+      message: "A sincronização da planilha já está em andamento no servidor em segundo plano..."
+    });
   }
+
+  isSyncing = true;
+  console.log("Triggering server-side background sync from /api/sync...");
+  
+  // Start sync in background without awaiting
+  syncDatabase()
+    .then((result) => {
+      console.log(`Server-side background sync finished successfully. Count: ${result.totalCount}`);
+    })
+    .catch((err) => {
+      console.error("Server-side background sync failed:", err);
+    })
+    .finally(() => {
+      isSyncing = false;
+    });
+
+  return res.json({
+    success: true,
+    status: "started",
+    message: "Sincronização iniciada no servidor em segundo plano..."
+  });
+});
+
+// Endpoint to check background sync status
+app.get("/api/sync-status", (req, res) => {
+  res.json({
+    isSyncing,
+    lastUpdated: fs.existsSync(PRODUCTS_FILE) ? fs.statSync(PRODUCTS_FILE).mtime.toISOString() : null
+  });
 });
 
 // Proxy endpoint to stream raw XLSX file to the client for frontend parsing fallback (bypasses CORS and server-side timeouts)
