@@ -381,24 +381,94 @@ app.get("/api/sync-status", (req, res) => {
   });
 });
 
+// Global cache variables to persist across warm serverless container instances on Vercel
+let cachedBuffer: Buffer | null = null;
+let cachedFileId: string | null = null;
+let cachedTime = 0;
+let downloadPromise: Promise<Buffer> | null = null;
+
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache window for parallel chunk sync
+const CACHE_FILE_PATH = path.join("/tmp", "drive_cache_maraca.xlsx");
+
+async function getFileWithCache(fileId: string, downloadUrl: string, bypassCache: boolean): Promise<Buffer> {
+  const now = Date.now();
+
+  // 1. If NOT bypassing cache, serve from warm memory cache
+  if (!bypassCache && cachedBuffer && cachedFileId === fileId && (now - cachedTime < CACHE_TTL_MS)) {
+    console.log("Serving Google Drive file from warm memory cache.");
+    return cachedBuffer;
+  }
+
+  // 2. If there is a concurrent download in progress, join it to prevent cache stampede
+  if (downloadPromise) {
+    console.log("Joining existing concurrent Google Drive download promise...");
+    return downloadPromise;
+  }
+
+  // 3. If NOT bypassing cache, check cold disk cache in the /tmp folder
+  if (!bypassCache) {
+    try {
+      const stats = fs.existsSync(CACHE_FILE_PATH) ? fs.statSync(CACHE_FILE_PATH) : null;
+      if (stats && (now - stats.mtimeMs < CACHE_TTL_MS)) {
+        console.log("Serving Google Drive file from /tmp disk cache.");
+        const diskBuffer = fs.readFileSync(CACHE_FILE_PATH);
+        cachedBuffer = diskBuffer;
+        cachedFileId = fileId;
+        cachedTime = stats.mtimeMs;
+        return diskBuffer;
+      }
+    } catch (err) {
+      console.warn("Error reading from /tmp disk cache:", err);
+    }
+  }
+
+  // 4. Download from Google Drive and populate cache
+  console.log(`Downloading fresh spreadsheet from Google Drive (bypassCache: ${bypassCache}): ${downloadUrl}`);
+  downloadPromise = (async () => {
+    try {
+      const driveRes = await fetch(downloadUrl);
+      if (!driveRes.ok) {
+        throw new Error(`Google Drive retornou status ${driveRes.status}: ${driveRes.statusText}`);
+      }
+      const arrayBuffer = await driveRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Save to memory cache
+      cachedBuffer = buffer;
+      cachedFileId = fileId;
+      cachedTime = Date.now();
+
+      // Save to disk cache (/tmp is writeable in Vercel serverless functions)
+      try {
+        fs.writeFileSync(CACHE_FILE_PATH, buffer);
+        console.log("Excel spreadsheet successfully cached to /tmp disk.");
+      } catch (writeErr) {
+        console.warn("Could not write cache file to /tmp:", writeErr);
+      }
+
+      return buffer;
+    } finally {
+      downloadPromise = null;
+    }
+  })();
+
+  return downloadPromise;
+}
+
 // Proxy endpoint to stream raw XLSX file to the client for frontend parsing fallback (bypasses CORS and server-side timeouts)
 app.get("/api/download-excel", async (req, res) => {
   try {
+    const bypassCache = req.query.bypassCache === "1" || req.query.force === "1";
     const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
     const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
-    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl}`);
     
-    const driveRes = await fetch(downloadUrl);
-    if (!driveRes.ok) {
-      throw new Error(`Google Drive retornou status ${driveRes.status}: ${driveRes.statusText}`);
-    }
+    // Download using the intelligent cache helper
+    const buffer = await getFileWithCache(targetFileId, downloadUrl, bypassCache);
+    const totalLength = buffer.length;
 
     res.setHeader("X-File-Name", encodeURIComponent(targetFileName));
     res.setHeader("Content-Type", "application/octet-stream");
 
-    const arrayBuffer = await driveRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const totalLength = buffer.length;
 
     // Supports dynamic chunk size to completely avoid Vercel's 4.5MB response limit
     const requestedChunkSize = req.query.chunkSize ? parseInt(req.query.chunkSize as string, 10) : 2000000; // Default 2MB chunks

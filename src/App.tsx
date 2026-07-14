@@ -189,7 +189,7 @@ export default function App() {
       if (isManual) {
         setSyncMessage("Obtendo informações do arquivo no Google Drive...");
       }
-      const infoRes = await fetch("/api/download-excel?info=1");
+      const infoRes = await fetch(`/api/download-excel?info=1${isManual ? "&bypassCache=1" : ""}`);
       if (!infoRes.ok) {
         throw new Error(`Falha ao obter informações do arquivo via proxy: ${infoRes.statusText}`);
       }
@@ -479,7 +479,30 @@ export default function App() {
       return;
     }
 
+    // Detect if we are running in a serverless environment (like Vercel)
+    const isVercelHost = typeof window !== "undefined" && (
+      window.location.hostname.includes("vercel.app") || 
+      window.location.hostname.includes("fluminense-consulta")
+    );
+
     setSyncing(true);
+
+    if (isVercelHost) {
+      // Direct client-side sync on Vercel to bypass the 10-second Serverless Function execution timeout limit
+      setServerSyncing(false);
+      try {
+        await runClientSideSync(isManual);
+      } catch (err: any) {
+        console.error("Direct Vercel client-side sync failed:", err);
+        if (isManual) {
+          setSyncError(err.message || "Falha na sincronização pelo navegador.");
+        }
+      } finally {
+        setSyncing(false);
+      }
+      return;
+    }
+
     setServerSyncing(true);
     if (isManual) {
       setSyncError(null);
