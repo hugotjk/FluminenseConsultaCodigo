@@ -384,10 +384,9 @@ app.get("/api/sync-status", (req, res) => {
 // Proxy endpoint to stream raw XLSX file to the client for frontend parsing fallback (bypasses CORS and server-side timeouts)
 app.get("/api/download-excel", async (req, res) => {
   try {
-    const part = req.query.part ? parseInt(req.query.part as string, 10) : 0;
     const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
     const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
-    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl} (Part: ${part})`);
+    console.log(`Proxying download of ${targetFileName} from Google Drive: ${downloadUrl}`);
     
     const driveRes = await fetch(downloadUrl);
     if (!driveRes.ok) {
@@ -399,20 +398,54 @@ app.get("/api/download-excel", async (req, res) => {
 
     const arrayBuffer = await driveRes.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+    const totalLength = buffer.length;
 
-    if (part === 1) {
-      // First 3MB
-      const chunk = buffer.subarray(0, 3000000);
-      return res.send(chunk);
-    } else if (part === 2) {
-      // Remaining bytes
-      const chunk = buffer.subarray(3000000);
-      return res.send(chunk);
-    } else {
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(targetFileName)}"`);
-      return res.send(buffer);
+    // Supports dynamic chunk size to completely avoid Vercel's 4.5MB response limit
+    const requestedChunkSize = req.query.chunkSize ? parseInt(req.query.chunkSize as string, 10) : 2000000; // Default 2MB chunks
+    const chunkSize = isNaN(requestedChunkSize) ? 2000000 : requestedChunkSize;
+    const totalParts = Math.ceil(totalLength / chunkSize);
+
+    if (req.query.info === "1") {
+      return res.json({
+        success: true,
+        fileName: targetFileName,
+        totalLength,
+        totalParts,
+        chunkSize
+      });
     }
+
+    if (req.query.part) {
+      const part = parseInt(req.query.part as string, 10);
+      if (isNaN(part) || part < 1) {
+        return res.status(400).json({ error: "Número de parte inválido" });
+      }
+
+      // Backward compatibility for old hardcoded part=1 (3MB) and part=2 (remainder)
+      if (!req.query.chunkSize && (part === 1 || part === 2) && totalParts <= 2) {
+        if (part === 1) {
+          const chunk = buffer.subarray(0, 3000000);
+          return res.send(chunk);
+        } else {
+          const chunk = buffer.subarray(3000000);
+          return res.send(chunk);
+        }
+      }
+
+      const start = (part - 1) * chunkSize;
+      const end = Math.min(start + chunkSize, totalLength);
+      
+      if (start >= totalLength) {
+        return res.status(416).json({ error: "Requested range not satisfiable" });
+      }
+
+      const chunk = buffer.subarray(start, end);
+      return res.send(chunk);
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(targetFileName)}"`);
+    return res.send(buffer);
   } catch (err: any) {
     console.error("Proxy Download Error:", err);
     return res.status(500).json({ error: err.message || "Erro ao baixar arquivo do Google Drive" });

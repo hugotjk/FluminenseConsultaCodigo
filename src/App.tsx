@@ -185,32 +185,43 @@ export default function App() {
         setSyncMessage("Tentando processamento local pelo navegador (evita limites de tempo do servidor)...");
       }
       
-      // 1. Download raw excel file in parallel chunks using the proxy (bypasses Vercel's 4.5MB limit)
+      // 1. Fetch file meta information to handle dynamic file sizes safely on serverless backends
       if (isManual) {
-        setSyncMessage("Baixando planilha do Google Drive em partes de forma rápida...");
+        setSyncMessage("Obtendo informações do arquivo no Google Drive...");
+      }
+      const infoRes = await fetch("/api/download-excel?info=1");
+      if (!infoRes.ok) {
+        throw new Error(`Falha ao obter informações do arquivo via proxy: ${infoRes.statusText}`);
+      }
+      const info = await infoRes.json();
+      const { totalParts, chunkSize, fileName: resolvedFileName, totalLength } = info;
+
+      if (isManual) {
+        setSyncMessage(`Baixando planilha (${(totalLength / 1024 / 1024).toFixed(2)} MB) em ${totalParts} partes de forma rápida...`);
       }
       
-      const [resPart1, resPart2] = await Promise.all([
-        fetch("/api/download-excel?part=1"),
-        fetch("/api/download-excel?part=2")
-      ]);
-      
-      if (!resPart1.ok || !resPart2.ok) {
-        throw new Error(`Falha no download das partes da planilha via proxy: ${resPart1.statusText || resPart2.statusText}`);
+      // Download all parts in parallel chunks
+      const partPromises = [];
+      for (let p = 1; p <= totalParts; p++) {
+        partPromises.push(
+          fetch(`/api/download-excel?part=${p}&chunkSize=${chunkSize}`).then(async (res) => {
+            if (!res.ok) {
+              throw new Error(`Falha no download da parte ${p}: ${res.statusText}`);
+            }
+            return res.arrayBuffer();
+          })
+        );
       }
-      
-      const fileNameHeader = resPart1.headers.get("X-File-Name");
-      const resolvedFileName = fileNameHeader ? decodeURIComponent(fileNameHeader) : "Base Maraca Flu.xlsx";
-      
-      const [abPart1, abPart2] = await Promise.all([
-        resPart1.arrayBuffer(),
-        resPart2.arrayBuffer()
-      ]);
+
+      const partBuffers = await Promise.all(partPromises);
       
       // Reconstruct the full file buffer
-      const combined = new Uint8Array(abPart1.byteLength + abPart2.byteLength);
-      combined.set(new Uint8Array(abPart1), 0);
-      combined.set(new Uint8Array(abPart2), abPart1.byteLength);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (let i = 0; i < partBuffers.length; i++) {
+        combined.set(new Uint8Array(partBuffers[i]), offset);
+        offset += partBuffers[i].byteLength;
+      }
       
       const arrayBuffer = combined.buffer;
       
