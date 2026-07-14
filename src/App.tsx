@@ -767,11 +767,13 @@ export default function App() {
             {/* Direct Sync Button */}
             <button
               onClick={() => triggerSync()}
-              disabled={syncing}
-              className="flex items-center gap-1.5 px-4 py-2 bg-flu-verde hover:bg-emerald-950 text-white text-xs font-bold rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.03] cursor-pointer"
+              disabled={syncing || !isOnline}
+              className={`flex items-center gap-1.5 px-4 py-2 text-white text-xs font-bold rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed hover:scale-[1.03] cursor-pointer ${
+                !isOnline ? "bg-slate-400 hover:bg-slate-400" : "bg-flu-verde hover:bg-emerald-950"
+              }`}
             >
               <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
-              {syncing ? "Sincronizando..." : "Sincronizar Planilha"}
+              {syncing ? "Sincronizando..." : !isOnline ? "Offline" : "Sincronizar Planilha"}
             </button>
 
 

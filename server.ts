@@ -99,21 +99,53 @@ async function getGoogleDriveFileId(): Promise<{ id: string; name: string }> {
   return { id: defaultFileId, name: defaultFileName };
 }
 
+// Robust downloader that automatically handles both native Google Sheets and uploaded Excel files (.xlsx)
+async function fetchFileFromGoogleDrive(fileId: string): Promise<Buffer> {
+  const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+  const exportUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`;
+
+  // 1. Try the direct download URL first (works for raw Excel uploads, which contain &rtpof=true)
+  console.log(`[Google Drive] Trying direct download URL for binary Excel uploads: ${directUrl}`);
+  try {
+    const directRes = await fetch(directUrl);
+    if (directRes.ok) {
+      const arrayBuffer = await directRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      // Check for ZIP/XLSX magic bytes (0x50 0x4B) to ensure it is a valid XLSX file and not an HTML login/error page
+      if (buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4B) {
+        console.log("[Google Drive] Direct download succeeded. Valid ZIP/XLSX file received.");
+        return buffer;
+      }
+      console.log("[Google Drive] Direct download returned a non-XLSX response (missing ZIP magic bytes).");
+    } else {
+      console.log(`[Google Drive] Direct download failed with status ${directRes.status}: ${directRes.statusText}`);
+    }
+  } catch (err) {
+    console.error("[Google Drive] Error attempting direct download:", err);
+  }
+
+  // 2. Try the export URL as a fallback (works for native Google Sheets)
+  console.log(`[Google Drive] Trying export URL for native Google Sheets: ${exportUrl}`);
+  const exportRes = await fetch(exportUrl);
+  if (!exportRes.ok) {
+    throw new Error(`Google Drive returned status ${exportRes.status}: ${exportRes.statusText}`);
+  }
+  const arrayBuffer = await exportRes.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  if (buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4B) {
+    console.log("[Google Drive] Export download succeeded. Valid ZIP/XLSX file received.");
+    return buffer;
+  }
+
+  throw new Error("O arquivo retornado pelo Google Drive não é uma planilha válida (formato inválido). Certifique-se de que a planilha está compartilhada publicamente como 'Qualquer pessoa com o link'.");
+}
+
 // Core database synchronization function from Google Drive
 async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
   const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
 
-  // 2. Download the file contents
-  const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
-  console.log(`Downloading file from: ${downloadUrl}`);
-  const downloadResponse = await fetch(downloadUrl);
-
-  if (!downloadResponse.ok) {
-    throw new Error(`Falha ao baixar arquivo do Google Drive: ${downloadResponse.statusText}`);
-  }
-
-  const arrayBuffer = await downloadResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  // 2. Download the file contents using the robust multi-source downloader
+  const buffer = await fetchFileFromGoogleDrive(targetFileId);
 
   // 3. Parse with SheetJS (XLSX) - OPTIMIZED FOR LARGE DATASETS
   const metaWorkbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
@@ -390,7 +422,7 @@ let downloadPromise: Promise<Buffer> | null = null;
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes cache window for parallel chunk sync
 const CACHE_FILE_PATH = path.join("/tmp", "drive_cache_maraca.xlsx");
 
-async function getFileWithCache(fileId: string, downloadUrl: string, bypassCache: boolean): Promise<Buffer> {
+async function getFileWithCache(fileId: string, bypassCache: boolean): Promise<Buffer> {
   const now = Date.now();
 
   // 1. If NOT bypassing cache, serve from warm memory cache
@@ -423,15 +455,10 @@ async function getFileWithCache(fileId: string, downloadUrl: string, bypassCache
   }
 
   // 4. Download from Google Drive and populate cache
-  console.log(`Downloading fresh spreadsheet from Google Drive (bypassCache: ${bypassCache}): ${downloadUrl}`);
+  console.log(`Downloading fresh spreadsheet from Google Drive (bypassCache: ${bypassCache})`);
   downloadPromise = (async () => {
     try {
-      const driveRes = await fetch(downloadUrl);
-      if (!driveRes.ok) {
-        throw new Error(`Google Drive retornou status ${driveRes.status}: ${driveRes.statusText}`);
-      }
-      const arrayBuffer = await driveRes.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      const buffer = await fetchFileFromGoogleDrive(fileId);
 
       // Save to memory cache
       cachedBuffer = buffer;
@@ -460,10 +487,9 @@ app.get("/api/download-excel", async (req, res) => {
   try {
     const bypassCache = req.query.bypassCache === "1" || req.query.force === "1";
     const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
-    const downloadUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=xlsx`;
     
     // Download using the intelligent cache helper
-    const buffer = await getFileWithCache(targetFileId, downloadUrl, bypassCache);
+    const buffer = await getFileWithCache(targetFileId, bypassCache);
     const totalLength = buffer.length;
 
     res.setHeader("X-File-Name", encodeURIComponent(targetFileName));
