@@ -19,25 +19,43 @@ export default function ProductCard({ product, imageConfig, onClick, currentTab 
   }, [product.referencia, product.referencia_fornecedor]);
 
   // Construct candidates list based on priority:
-  // 1. GitHub reference JPG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia&".jpg?raw=true"
-  // 2. GitHub reference PNG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia&".png?raw=true"
-  // 3. GitHub supplier reference JPG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".jpg?raw=true"
-  // 4. GitHub supplier reference PNG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".png?raw=true"
-  // 5. User configured fallback (if any)
+  // 1. GitHub supplier reference raw URL: "https://raw.githubusercontent.com/hugotjk/FluminenseConsulta/main/"&referencia_fornecedor&".jpg"
+  // 2. GitHub reference raw URL: "https://raw.githubusercontent.com/hugotjk/FluminenseConsulta/main/"&referencia&".jpg"
+  // Supports both JPG and PNG, and handles potential Excel decimal formats (like .0)
   const imageUrls: string[] = [];
-  if (product.referencia) {
-    const trimmedRef = product.referencia.trim();
-    if (trimmedRef) {
-      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedRef}.jpg?raw=true`);
-      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedRef}.png?raw=true`);
+  const refsToTry: string[] = [];
+
+  if (product.referencia_fornecedor) {
+    const rawForn = String(product.referencia_fornecedor).trim();
+    if (rawForn) {
+      refsToTry.push(rawForn);
+      const cleanForn = rawForn.replace(/\.0$/, "");
+      if (cleanForn !== rawForn) {
+        refsToTry.push(cleanForn);
+      }
     }
   }
-  if (product.referencia_fornecedor) {
-    const trimmedFornRef = product.referencia_fornecedor.trim();
-    if (trimmedFornRef && trimmedFornRef !== product.referencia) {
-      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedFornRef}.jpg?raw=true`);
-      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedFornRef}.png?raw=true`);
+
+  if (product.referencia) {
+    const rawRef = String(product.referencia).trim();
+    if (rawRef) {
+      refsToTry.push(rawRef);
+      const cleanRef = rawRef.replace(/\.0$/, "");
+      if (cleanRef !== rawRef) {
+        refsToTry.push(cleanRef);
+      }
     }
+  }
+
+  // Generate candidates for each unique reference in priority order
+  const uniqueRefs = Array.from(new Set(refsToTry));
+  for (const ref of uniqueRefs) {
+    // 1. Direct raw.githubusercontent.com (preferred - fast, correct CORS, no redirect)
+    imageUrls.push(`https://raw.githubusercontent.com/hugotjk/FluminenseConsulta/main/${ref}.jpg`);
+    imageUrls.push(`https://raw.githubusercontent.com/hugotjk/FluminenseConsulta/main/${ref}.png`);
+    // 2. Direct github.com with raw=true (fallback redirect)
+    imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${ref}.jpg?raw=true`);
+    imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${ref}.png?raw=true`);
   }
 
   if (imageConfig.baseUrl) {
