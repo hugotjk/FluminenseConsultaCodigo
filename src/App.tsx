@@ -362,37 +362,21 @@ export default function App() {
             )
           );
           
-        const ord = findCol(/ord/i);
-        const cod = findCol(/codigo.*barra|cod.*barra|barras|cod_barra/i);
-        const cor = findCol(/cor/i);
-        const desc = findCol(/desc/i);
-        const ean = findCol(/ean/i);
-        const forn = findCol(/fornecedor|forn/i);
-        const mod = findCol(/modelo|mod/i);
-        const lin = findCol(/linha/i);
-        const grup = findCol(/grupo/i);
-        const prec = findCol(/preco.*varejo|preco|valor|varejo/i);
-        const ref = findCol(/^ref(erencia)?$/i);
-        const ref_forn = findCol(/ref.*forn|fornecedor.*ref|ref_fornecedor/i);
-        const tam = findCol(/tamanho|tam/i);
-        const vend = findCol(/^venda$/i);
-        const mara = findCol(/maracana/i);
-        
-        if (ord !== -1) colMap.ord = ord;
-        if (cod !== -1) colMap.codigo_barra = cod;
-        if (cor !== -1) colMap.cor = cor;
-        if (desc !== -1) colMap.descricao = desc;
-        if (ean !== -1) colMap.ean = ean;
-        if (forn !== -1) colMap.fornecedor = forn;
-        if (lin !== -1) colMap.linha = lin;
-        if (grup !== -1) colMap.grupo = grup;
-        if (prec !== -1) colMap.preco_varejo = prec;
-        if (ref !== -1) colMap.referencia = ref;
-        if (ref_forn !== -1) colMap.referencia_fornecedor = ref_forn;
-        if (tam !== -1) colMap.tamanho = tam;
-        if (vend !== -1) colMap.venda = vend;
-        if (mod !== -1) colMap.modelo = mod;
-        if (mara !== -1) colMap.maracana = mara;
+        colMap.ord = findCol(/ord/i);
+        colMap.codigo_barra = findCol(/codigo.*barra|cod.*barra|barras|cod_barra/i);
+        colMap.cor = findCol(/cor/i);
+        colMap.descricao = findCol(/desc/i);
+        colMap.ean = findCol(/ean/i);
+        colMap.fornecedor = findCol(/fornecedor|forn/i);
+        colMap.modelo = findCol(/modelo|mod/i);
+        colMap.linha = findCol(/linha/i);
+        colMap.grupo = findCol(/grupo/i);
+        colMap.preco_varejo = findCol(/preco.*varejo|preco|valor|varejo/i);
+        colMap.referencia = findCol(/^ref(erencia)?$/i);
+        colMap.referencia_fornecedor = findCol(/ref.*forn|fornecedor.*ref|ref_fornecedor/i);
+        colMap.tamanho = findCol(/tamanho|tam/i);
+        colMap.venda = findCol(/^venda$/i);
+        colMap.maracana = findCol(/maracana/i);
       }
       
       const startRow = headerIdx !== -1 ? headerIdx + 1 : 0;
@@ -402,57 +386,63 @@ export default function App() {
         const row = rawRows[i];
         if (!row || row.length === 0) continue;
         
-        const ref = String(row[colMap.referencia] || "").trim();
+        const ref = colMap.referencia !== -1 ? String(row[colMap.referencia] || "").trim() : "";
         if (!ref || ref === "undefined" || /referencia/i.test(ref)) {
           continue;
         }
         
-        const cor = String(row[colMap.cor] || "").trim() || "ÚNICA";
-        const desc = String(row[colMap.descricao] || "").trim();
-        const ean = String(row[colMap.ean] || "").trim();
-        const codBarra = String(row[colMap.codigo_barra] || "").trim();
-        const fornecedor = String(row[colMap.fornecedor] || "").trim() || "OUTROS";
-        const linha = String(row[colMap.linha] || "").trim() || "GERAL";
-        const grupo = String(row[colMap.grupo] || "").trim() || "GERAL";
-        const refForn = String(row[colMap.referencia_fornecedor] || "").trim();
+        const cor = colMap.cor !== -1 ? String(row[colMap.cor] || "").trim() || "ÚNICA" : "ÚNICA";
+        const desc = colMap.descricao !== -1 ? String(row[colMap.descricao] || "").trim() : "";
+        const ean = colMap.ean !== -1 ? String(row[colMap.ean] || "").trim() : "";
+        const codBarra = colMap.codigo_barra !== -1 ? String(row[colMap.codigo_barra] || "").trim() : "";
+        const fornecedor = colMap.fornecedor !== -1 ? String(row[colMap.fornecedor] || "").trim() || "OUTROS" : "OUTROS";
+        const linha = colMap.linha !== -1 ? String(row[colMap.linha] || "").trim() || "GERAL" : "GERAL";
+        const grupo = colMap.grupo !== -1 ? String(row[colMap.grupo] || "").trim() || "GERAL" : "GERAL";
+        const refForn = colMap.referencia_fornecedor !== -1 ? String(row[colMap.referencia_fornecedor] || "").trim() : "";
         
         // Price parsing
-        const precoRaw = row[colMap.preco_varejo];
         let preco = 0;
-        if (typeof precoRaw === "number") {
-          preco = precoRaw;
-        } else if (precoRaw) {
-          preco = parseFloat(
-            String(precoRaw)
-              .replace("R$", "")
-              .replace(/\s/g, "")
-              .replace(/\./g, "")
-              .replace(",", ".")
-          );
-          if (isNaN(preco)) preco = 0;
+        if (colMap.preco_varejo !== -1) {
+          const precoRaw = row[colMap.preco_varejo];
+          if (typeof precoRaw === "number") {
+            preco = precoRaw;
+          } else if (precoRaw) {
+            preco = parseFloat(
+              String(precoRaw)
+                .replace("R$", "")
+                .replace(/\s/g, "")
+                .replace(/\./g, "")
+                .replace(",", ".")
+            );
+            if (isNaN(preco)) preco = 0;
+          }
         }
         
         // Sales parsing
-        const vendaRaw = row[colMap.venda];
         let venda = 0;
-        if (typeof vendaRaw === "number") {
-          venda = Math.round(vendaRaw);
-        } else if (vendaRaw) {
-          venda = parseInt(String(vendaRaw).replace(/[^\d-]/g, ""), 10);
-          if (isNaN(venda)) venda = 0;
+        if (colMap.venda !== -1) {
+          const vendaRaw = row[colMap.venda];
+          if (typeof vendaRaw === "number") {
+            venda = Math.round(vendaRaw);
+          } else if (vendaRaw) {
+            venda = parseInt(String(vendaRaw).replace(/[^\d-]/g, ""), 10);
+            if (isNaN(venda)) venda = 0;
+          }
         }
         
         // Maracana sales parsing
-        const maracanaRaw = colMap.maracana !== -1 ? row[colMap.maracana] : undefined;
         let maracanaVenda = 0;
-        if (typeof maracanaRaw === "number") {
-          maracanaVenda = Math.round(maracanaRaw);
-        } else if (maracanaRaw) {
-          maracanaVenda = parseInt(String(maracanaRaw).replace(/[^\d-]/g, ""), 10);
-          if (isNaN(maracanaVenda)) maracanaVenda = 0;
+        if (colMap.maracana !== -1) {
+          const maracanaRaw = row[colMap.maracana];
+          if (typeof maracanaRaw === "number") {
+            maracanaVenda = Math.round(maracanaRaw);
+          } else if (maracanaRaw) {
+            maracanaVenda = parseInt(String(maracanaRaw).replace(/[^\d-]/g, ""), 10);
+            if (isNaN(maracanaVenda)) maracanaVenda = 0;
+          }
         }
         
-        const tamanho = String(row[colMap.tamanho] || "").trim() || "U";
+        const tamanho = colMap.tamanho !== -1 ? String(row[colMap.tamanho] || "").trim() || "U" : "U";
         
         let modelo = "";
         if (colMap.modelo !== -1) {
