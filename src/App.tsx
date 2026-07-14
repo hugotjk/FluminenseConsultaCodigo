@@ -874,9 +874,14 @@ export default function App() {
               <div className="absolute inset-x-0 bottom-0 h-1 bg-flu-verde" />
             </div>
             <div>
-              <h1 className="font-display font-black text-xl text-flu-grena tracking-tight uppercase leading-none">
-                Maraca Flu
-              </h1>
+              <div className="flex items-center gap-2">
+                <h1 className="font-display font-black text-xl text-flu-grena tracking-tight uppercase leading-none">
+                  Maraca Flu
+                </h1>
+                <span className="bg-flu-grena/10 text-flu-grena border border-flu-grena/20 text-[9px] font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider">
+                  v1.2.0
+                </span>
+              </div>
               <p className="text-xs text-slate-400 font-bold tracking-wider uppercase mt-1">
                 Consulta de Produtos
               </p>
@@ -1116,7 +1121,7 @@ export default function App() {
       {/* FOOTER */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-[10px] text-slate-400 font-bold uppercase tracking-wider shrink-0 z-20">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-2">
-          <span>© 2026 Maraca Flu — Todos os direitos reservados.</span>
+          <span>© 2026 Maraca Flu v1.2.0 — Todos os direitos reservados.</span>
           <span className="flex items-center gap-1 text-[9px] text-slate-300">
             <Info size={11} /> Cores oficiais do Fluminense F.C.
           </span>
