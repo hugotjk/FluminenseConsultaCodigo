@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { GroupedProduct, ImageConfig } from "./types";
 import { getFromDB, saveToDB } from "./utils/db";
+import { saveProductsToFirestore, loadProductsFromFirestore } from "./utils/firebase";
 import ProductCard from "./components/ProductCard";
 import ProductDetailModal from "./components/ProductDetailModal";
 import ImageConfigModal from "./components/ImageConfigModal";
@@ -100,28 +101,67 @@ export default function App() {
       }
 
       // Fallback to fetch from backend if cache is empty
-      const res = await fetch("/api/products");
-      if (res.ok) {
-        const data = await res.json();
-        const productsList = data.products || [];
+      let productsList: GroupedProduct[] = [];
+      let lastUpdatedVal: string | null = null;
+      let fileNameVal: string | null = null;
+      let totalCountVal = 0;
+      let loadedSuccessfully = false;
+
+      try {
+        console.log("App: Tentando carregar do backend (/api/products)...");
+        const res = await fetch("/api/products");
+        if (res.ok) {
+          const data = await res.json();
+          productsList = data.products || [];
+          lastUpdatedVal = data.lastUpdated || null;
+          fileNameVal = data.fileName || null;
+          totalCountVal = data.totalCount || 0;
+          if (productsList.length > 0) {
+            loadedSuccessfully = true;
+            console.log("App: Carregado com sucesso do backend!");
+          }
+        }
+      } catch (backendErr) {
+        console.warn("App: Falha ao carregar do backend, tentando carregar diretamente do Firestore...", backendErr);
+      }
+
+      // Se falhou no backend ou retornou vazio, carregar diretamente do Firestore no navegador (bypassa limite da Vercel)
+      if (!loadedSuccessfully) {
+        try {
+          console.log("App: Tentando carregar diretamente do Firestore...");
+          const firestoreData = await loadProductsFromFirestore();
+          if (firestoreData && firestoreData.products && firestoreData.products.length > 0) {
+            productsList = firestoreData.products;
+            lastUpdatedVal = firestoreData.lastUpdated;
+            fileNameVal = firestoreData.fileName;
+            totalCountVal = firestoreData.totalCount;
+            loadedSuccessfully = true;
+            console.log("App: Carregado com sucesso diretamente do Firestore!");
+          }
+        } catch (firestoreErr) {
+          console.error("App: Falha ao carregar do Firestore também:", firestoreErr);
+        }
+      }
+
+      if (loadedSuccessfully) {
         setProducts(productsList);
-        setLastUpdated(data.lastUpdated || null);
-        setFileName(data.fileName || null);
-        setTotalCount(data.totalCount || 0);
+        setLastUpdated(lastUpdatedVal);
+        setFileName(fileNameVal);
+        setTotalCount(totalCountVal);
 
         // Store in IndexedDB for future offline access
         if (productsList.length > 0) {
           await saveToDB("maraca_flu_products", productsList);
-          if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
-          if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
-          localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
+          if (lastUpdatedVal) localStorage.setItem("maraca_flu_last_updated", lastUpdatedVal);
+          if (fileNameVal) localStorage.setItem("maraca_flu_file_name", fileNameVal);
+          localStorage.setItem("maraca_flu_total_count", String(totalCountVal || productsList.length));
         }
+      }
 
-        // Auto-sync on load if the cache is completely empty
-        if (autoSyncIfEmpty && productsList.length === 0) {
-          console.log("Database empty. Auto-triggering sync...");
-          triggerSync(false);
-        }
+      // Auto-sync on load if the cache is completely empty and both sources failed
+      if (autoSyncIfEmpty && productsList.length === 0) {
+        console.log("Banco de dados vazio. Iniciando sincronização automática...");
+        triggerSync(false);
       }
     } catch (err) {
       console.error("Erro ao carregar produtos:", err);
@@ -502,6 +542,22 @@ export default function App() {
       localStorage.setItem("maraca_flu_last_updated", nowStr);
       localStorage.setItem("maraca_flu_file_name", resolvedFileName);
       localStorage.setItem("maraca_flu_total_count", String(productsList.length));
+      
+      // Also save directly to Firestore from client-side (critical for Vercel persistence across all clients!)
+      try {
+        if (isManual) {
+          setSyncMessage("Salvando dados sincronizados no Firestore para todos os usuários...");
+        }
+        await saveProductsToFirestore(productsList, {
+          lastUpdated: nowStr,
+          totalCount: productsList.length,
+          fileName: resolvedFileName,
+          fileId: "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u"
+        });
+        console.log("App: Dados salvos com sucesso no Firestore diretamente do navegador!");
+      } catch (firestoreErr) {
+        console.error("App: Erro ao salvar dados no Firestore:", firestoreErr);
+      }
       
       if (isManual) {
         setSyncMessage("Sincronização concluída com sucesso pelo navegador!");

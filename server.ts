@@ -4,6 +4,7 @@ import fs from "fs";
 import compression from "compression";
 import * as XLSX from "xlsx";
 import { createServer as createViteServer } from "vite";
+import { saveProductsToFirestore, loadProductsFromFirestore } from "./src/utils/firebase";
 
 const app = express();
 const PORT = 3000;
@@ -50,8 +51,18 @@ function getImageConfig(): ImageConfig {
 }
 
 // Get products from cached file
-app.get("/api/products", (req, res) => {
+app.get("/api/products", async (req, res) => {
   try {
+    // 1. Try loading from Firestore first (critical for Vercel/serverless environments)
+    console.log("Endpoint /api/products: loading from Firestore...");
+    const firestoreData = await loadProductsFromFirestore();
+    if (firestoreData && firestoreData.products && firestoreData.products.length > 0) {
+      console.log(`Endpoint /api/products: loaded ${firestoreData.products.length} products from Firestore`);
+      return res.json(firestoreData);
+    }
+    
+    // 2. Fallback to local products.json file if Firestore is empty/failed
+    console.log("Endpoint /api/products: Firestore empty or failed, falling back to local file...");
     if (fs.existsSync(PRODUCTS_FILE)) {
       const data = JSON.parse(fs.readFileSync(PRODUCTS_FILE, "utf-8"));
       return res.json(data);
@@ -451,7 +462,20 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
     totalCount: products.length,
   };
 
-  // Save to disk (best effort cache - minified for maximum performance and minimum size)
+  // 1. Save to Firestore (primary master copy for all environments, especially serverless)
+  try {
+    await saveProductsToFirestore(products, {
+      lastUpdated: syncResult.lastUpdated,
+      totalCount: products.length,
+      fileName: targetFileName,
+      fileId: targetFileId,
+    });
+    console.log("Database successfully saved to Firestore!");
+  } catch (err) {
+    console.error("Failed to save synchronized database to Firestore:", err);
+  }
+
+  // 2. Save to disk (best effort local cache)
   try {
     fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(syncResult));
     console.log(`Database synchronized successfully! Total products grouped: ${products.length}`);
@@ -492,11 +516,19 @@ app.post("/api/sync", async (req, res) => {
 });
 
 // Endpoint to check background sync status (kept for compatibility, always returning not syncing now that it is synchronous)
-app.get("/api/sync-status", (req, res) => {
-  res.json({
-    isSyncing: false,
-    lastUpdated: fs.existsSync(PRODUCTS_FILE) ? fs.statSync(PRODUCTS_FILE).mtime.toISOString() : null
-  });
+app.get("/api/sync-status", async (req, res) => {
+  try {
+    const firestoreData = await loadProductsFromFirestore();
+    res.json({
+      isSyncing: false,
+      lastUpdated: firestoreData ? firestoreData.lastUpdated : (fs.existsSync(PRODUCTS_FILE) ? fs.statSync(PRODUCTS_FILE).mtime.toISOString() : null)
+    });
+  } catch (err) {
+    res.json({
+      isSyncing: false,
+      lastUpdated: fs.existsSync(PRODUCTS_FILE) ? fs.statSync(PRODUCTS_FILE).mtime.toISOString() : null
+    });
+  }
 });
 
 // Global cache variables to persist across warm serverless container instances on Vercel

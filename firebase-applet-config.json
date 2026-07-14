@@ -3,8 +3,10 @@
   "appId": "1:151986359434:web:c658d1531e2c2dfe2bf173",
   "apiKey": "AIzaSyCmUO7RKJ1dkzTFknyujb1Ydzam9oDIuxM",
   "authDomain": "poised-grin-8tgzl.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-consultadeprodut-8cd1dea3-295c-4716-a21f-84fd38e366b7",
   "storageBucket": "poised-grin-8tgzl.firebasestorage.app",
   "messagingSenderId": "151986359434",
   "measurementId": "",
-  "oAuthClientId": "151986359434-4h31h3gb9v9rh9r110lmmg7u7vej2j40.apps.googleusercontent.com"
+  "oAuthClientId": "151986359434-4h31h3gb9v9rh9r110lmmg7u7vej2j40.apps.googleusercontent.com",
+  "recaptchaSiteKey": ""
 }
