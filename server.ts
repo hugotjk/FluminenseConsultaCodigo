@@ -30,12 +30,14 @@ interface ImageConfig {
   baseUrl: string;
   matchField: "referencia" | "referencia_fornecedor" | "ean";
   extension: "jpg" | "png" | "jpeg" | "webp";
+  spreadsheetId?: string;
 }
 
 const defaultImageConfig: ImageConfig = {
   baseUrl: "",
   matchField: "referencia",
   extension: "jpg",
+  spreadsheetId: "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u",
 };
 
 // Helper to get image config
@@ -82,11 +84,12 @@ app.get("/api/image-config", (req, res) => {
 // Update image config
 app.post("/api/image-config", (req, res) => {
   try {
-    const { baseUrl, matchField, extension } = req.body;
+    const { baseUrl, matchField, extension, spreadsheetId } = req.body;
     const config: ImageConfig = {
       baseUrl: baseUrl || "",
       matchField: matchField || "referencia",
       extension: extension || "jpg",
+      spreadsheetId: spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u",
     };
     try {
       fs.writeFileSync(IMAGE_CONFIG_FILE, JSON.stringify(config, null, 2));
@@ -102,11 +105,12 @@ app.post("/api/image-config", (req, res) => {
 
 // Helper to resolve Google Drive file ID and name
 async function getGoogleDriveFileId(): Promise<{ id: string; name: string }> {
-  // Use the direct sheet ID provided by the user
-  const defaultFileId = "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
+  // Use the configured spreadsheetId or fallback to the default
+  const config = getImageConfig();
+  const defaultFileId = config.spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
   const defaultFileName = "Base Maraca Flu.xlsx";
 
-  console.log(`Using direct file ID: ${defaultFileId}`);
+  console.log(`Using dynamic file ID: ${defaultFileId}`);
   return { id: defaultFileId, name: defaultFileName };
 }
 

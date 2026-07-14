@@ -32,4 +32,5 @@ export interface ImageConfig {
   baseUrl: string;
   matchField: "referencia" | "referencia_fornecedor" | "ean";
   extension: "jpg" | "png" | "jpeg" | "webp";
+  spreadsheetId?: string;
 }
