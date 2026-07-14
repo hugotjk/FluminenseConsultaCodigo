@@ -144,11 +144,33 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Load products from cache first, then automatically trigger synchronization on app load
+    // Load products from cache first, then automatically check and trigger sync
     fetchProducts(false).then(() => {
-      triggerSync(false); // Silently sync on startup
+      // Check if data is empty or stale (> 4 hours) to trigger automatic silent sync
+      const cachedLastUpdated = localStorage.getItem("maraca_flu_last_updated");
+      let isCacheStale = true;
+      if (cachedLastUpdated) {
+        const diffMs = new Date().getTime() - new Date(cachedLastUpdated).getTime();
+        const diffHours = diffMs / (1000 * 60 * 60);
+        isCacheStale = diffHours >= 4;
+      }
+      
+      // If there is no data or it is more than 4 hours old, sync silently
+      if (isCacheStale) {
+        console.log("Cache is stale or empty. Triggering automatic silent sync on load...");
+        triggerSync(false);
+      }
     });
     fetchImageConfig();
+
+    // Setup an automatic interval of 4 hours to sync silently while the app is open
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    const intervalId = setInterval(() => {
+      console.log("4 hours elapsed since last check. Triggering automatic silent sync...");
+      triggerSync(false);
+    }, FOUR_HOURS);
+
+    return () => clearInterval(intervalId);
   }, []);
 
   // 2. Database Synchronization Handler
@@ -801,7 +823,7 @@ export default function App() {
         </div>
 
         {/* SEARCH AND FILTERS CONTAINER */}
-        <div className="bg-white rounded-[2rem] shadow-sm border border-slate-100 p-6 flex flex-col gap-5 shrink-0">
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-4 flex flex-col gap-3.5 shrink-0">
           {/* Smart Search Bar */}
           <div className="relative">
             <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none text-slate-400">
@@ -812,7 +834,7 @@ export default function App() {
               placeholder="Digite a referência, referência fornecedor, EAN ou parte da descrição..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-11 pr-24 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-flu-grena focus:ring-1 focus:ring-flu-grena transition-all text-slate-800 placeholder-slate-400 font-medium"
+              className="w-full pl-11 pr-24 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:border-flu-grena focus:ring-1 focus:ring-flu-grena transition-all text-slate-800 placeholder-slate-400 font-medium"
             />
             {search && (
               <button
@@ -825,7 +847,7 @@ export default function App() {
           </div>
 
           {/* Dynamic Cascading Filters */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <SearchableSelect
               label="Fornecedor"
               icon={<Layers size={11} />}

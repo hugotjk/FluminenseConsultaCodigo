@@ -19,13 +19,22 @@ export default function ProductCard({ product, imageConfig, onClick, currentTab 
   }, [product.referencia, product.referencia_fornecedor]);
 
   // Construct candidates list based on priority:
-  // 1. GitHub JPG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".jpg?raw=true"
-  // 2. GitHub PNG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".png?raw=true"
-  // 3. User configured fallback (if any)
+  // 1. GitHub reference JPG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia&".jpg?raw=true"
+  // 2. GitHub reference PNG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia&".png?raw=true"
+  // 3. GitHub supplier reference JPG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".jpg?raw=true"
+  // 4. GitHub supplier reference PNG: "https://github.com/hugotjk/FluminenseConsulta/blob/main/"&referencia_fornecedor&".png?raw=true"
+  // 5. User configured fallback (if any)
   const imageUrls: string[] = [];
+  if (product.referencia) {
+    const trimmedRef = product.referencia.trim();
+    if (trimmedRef) {
+      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedRef}.jpg?raw=true`);
+      imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedRef}.png?raw=true`);
+    }
+  }
   if (product.referencia_fornecedor) {
     const trimmedFornRef = product.referencia_fornecedor.trim();
-    if (trimmedFornRef) {
+    if (trimmedFornRef && trimmedFornRef !== product.referencia) {
       imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedFornRef}.jpg?raw=true`);
       imageUrls.push(`https://github.com/hugotjk/FluminenseConsulta/blob/main/${trimmedFornRef}.png?raw=true`);
     }

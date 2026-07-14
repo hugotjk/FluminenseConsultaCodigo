@@ -59,12 +59,7 @@ export default function SearchableSelect({
   };
 
   return (
-    <div className="space-y-1 w-full" ref={containerRef}>
-      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1 select-none">
-        {icon}
-        {label}
-      </label>
-
+    <div className="w-full" ref={containerRef}>
       <div className="relative">
         {/* Trigger Button */}
         <button
@@ -73,13 +68,19 @@ export default function SearchableSelect({
             setIsOpen(!isOpen);
             setSearchTerm("");
           }}
-          className={`w-full flex items-center justify-between pl-3 pr-3 py-2.5 bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 transition-all text-left cursor-pointer focus:outline-none focus:ring-2 focus:ring-flu-grena/20 focus:border-flu-grena ${
+          className={`w-full flex items-center justify-between pl-3 pr-2 py-2 bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-xl text-xs transition-all text-left cursor-pointer focus:outline-none focus:ring-2 focus:ring-flu-grena/20 focus:border-flu-grena ${
             isOpen ? "border-flu-grena ring-2 ring-flu-grena/20" : ""
           }`}
         >
-          <span className="truncate pr-4">
-            {value ? `${value} (${options.find(([opt]) => opt === value)?.[1]?.sales || 0} un.)` : `${placeholder} (${allLabelSales} un.)`}
-          </span>
+          <div className="flex items-center gap-1.5 truncate mr-2">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1 select-none">
+              {icon}
+              {label}:
+            </span>
+            <span className="truncate font-bold text-slate-700">
+              {value ? `${value} (${options.find(([opt]) => opt === value)?.[1]?.sales || 0} un.)` : `${placeholder} (${allLabelSales} un.)`}
+            </span>
+          </div>
           <div className="flex items-center gap-1 shrink-0">
             {value && (
               <span
