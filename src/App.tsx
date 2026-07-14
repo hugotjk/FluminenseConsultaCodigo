@@ -181,49 +181,109 @@ export default function App() {
   // 2. Database Synchronization Handler
   const runClientSideSync = async (isManual: boolean): Promise<boolean> => {
     try {
-      if (isManual) {
-        setSyncMessage("Tentando processamento local pelo navegador (evita limites de tempo do servidor)...");
-      }
+      let arrayBuffer: ArrayBuffer | null = null;
+      let resolvedFileName = "Base Maraca Flu.xlsx";
       
-      // 1. Fetch file meta information to handle dynamic file sizes safely on serverless backends
-      if (isManual) {
-        setSyncMessage("Obtendo informações do arquivo no Google Drive...");
-      }
-      const infoRes = await fetch(`/api/download-excel?info=1${isManual ? "&bypassCache=1" : ""}`);
-      if (!infoRes.ok) {
-        throw new Error(`Falha ao obter informações do arquivo via proxy: ${infoRes.statusText}`);
-      }
-      const info = await infoRes.json();
-      const { totalParts, chunkSize, fileName: resolvedFileName, totalLength } = info;
+      const fileId = "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
+      const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
 
+      // TENTATIVA 1: Download direto do Google Drive no navegador (CORS) - Super rápido, ignora limites da Vercel!
       if (isManual) {
-        setSyncMessage(`Baixando planilha (${(totalLength / 1024 / 1024).toFixed(2)} MB) em ${totalParts} partes de forma rápida...`);
+        setSyncMessage("Tentando conexão direta com o Google Drive (super rápido)...");
       }
-      
-      // Download all parts in parallel chunks
-      const partPromises = [];
-      for (let p = 1; p <= totalParts; p++) {
-        partPromises.push(
-          fetch(`/api/download-excel?part=${p}&chunkSize=${chunkSize}`).then(async (res) => {
-            if (!res.ok) {
-              throw new Error(`Falha no download da parte ${p}: ${res.statusText}`);
+      try {
+        console.log("Attempting direct Google Drive download...");
+        const response = await fetch(directUrl);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          // Verify ZIP/XLSX magic bytes (0x50 0x4B)
+          const uint8 = new Uint8Array(buffer.slice(0, 4));
+          if (uint8.length >= 2 && uint8[0] === 0x50 && uint8[1] === 0x4B) {
+            console.log("Direct Google Drive download succeeded with valid ZIP/XLSX bytes!");
+            arrayBuffer = buffer;
+          } else {
+            console.warn("Direct download did not return a valid XLSX file (missing ZIP magic bytes).");
+          }
+        } else {
+          console.warn(`Direct download failed with status ${response.status}: ${response.statusText}`);
+        }
+      } catch (directErr) {
+        console.warn("Direct download from Google Drive failed (likely CORS or network limit):", directErr);
+      }
+
+      // TENTATIVA 2: Se o download direto falhou, tentar obter em um arquivo único via Proxy do servidor
+      if (!arrayBuffer) {
+        if (isManual) {
+          setSyncMessage("Tentando conexão intermediária via servidor...");
+        }
+        try {
+          console.log("Attempting single-request proxy download...");
+          const response = await fetch(`/api/download-excel?force=1`);
+          if (response.ok) {
+            const buffer = await response.arrayBuffer();
+            const uint8 = new Uint8Array(buffer.slice(0, 4));
+            if (uint8.length >= 2 && uint8[0] === 0x50 && uint8[1] === 0x4B) {
+              console.log("Single-request proxy download succeeded with valid ZIP/XLSX bytes!");
+              arrayBuffer = buffer;
+              const fileNameHeader = response.headers.get("X-File-Name");
+              if (fileNameHeader) resolvedFileName = decodeURIComponent(fileNameHeader);
+            } else {
+              console.warn("Proxy download did not return a valid XLSX file.");
             }
-            return res.arrayBuffer();
-          })
-        );
+          } else {
+            console.warn(`Proxy single download failed with status ${response.status}`);
+          }
+        } catch (proxyErr) {
+          console.warn("Proxy single download failed:", proxyErr);
+        }
       }
 
-      const partBuffers = await Promise.all(partPromises);
-      
-      // Reconstruct the full file buffer
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (let i = 0; i < partBuffers.length; i++) {
-        combined.set(new Uint8Array(partBuffers[i]), offset);
-        offset += partBuffers[i].byteLength;
+      // TENTATIVA 3: Se o proxy de arquivo único falhou, usar o sistema de partes/pedaços dinâmicos (Chunks)
+      if (!arrayBuffer) {
+        if (isManual) {
+          setSyncMessage("Usando proxy em blocos dinâmicos para grandes volumes...");
+        }
+        const infoRes = await fetch(`/api/download-excel?info=1${isManual ? "&bypassCache=1" : ""}`);
+        if (!infoRes.ok) {
+          throw new Error(`Falha ao obter informações do arquivo via proxy: ${infoRes.statusText}`);
+        }
+        const info = await infoRes.json();
+        const { totalParts, chunkSize, fileName: infoFileName, totalLength } = info;
+        resolvedFileName = infoFileName || resolvedFileName;
+
+        if (isManual) {
+          setSyncMessage(`Baixando planilha (${(totalLength / 1024 / 1024).toFixed(2)} MB) em ${totalParts} partes...`);
+        }
+        
+        // Download all parts in parallel chunks
+        const partPromises = [];
+        for (let p = 1; p <= totalParts; p++) {
+          partPromises.push(
+            fetch(`/api/download-excel?part=${p}&chunkSize=${chunkSize}`).then(async (res) => {
+              if (!res.ok) {
+                throw new Error(`Falha no download da parte ${p}: ${res.statusText}`);
+              }
+              return res.arrayBuffer();
+            })
+          );
+        }
+
+        const partBuffers = await Promise.all(partPromises);
+        
+        // Reconstruct the full file buffer
+        const combined = new Uint8Array(totalLength);
+        let offset = 0;
+        for (let i = 0; i < partBuffers.length; i++) {
+          combined.set(new Uint8Array(partBuffers[i]), offset);
+          offset += partBuffers[i].byteLength;
+        }
+        
+        arrayBuffer = combined.buffer;
       }
-      
-      const arrayBuffer = combined.buffer;
+
+      if (!arrayBuffer) {
+        throw new Error("Não foi possível obter o arquivo de planilha das fontes disponíveis. Verifique o link de compartilhamento.");
+      }
       
       if (isManual) {
         setSyncMessage("Lendo planilha de 100 mil linhas no navegador...");
