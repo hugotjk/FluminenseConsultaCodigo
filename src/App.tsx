@@ -16,6 +16,7 @@ import {
   Grid,
 } from "lucide-react";
 import { GroupedProduct, ImageConfig } from "./types";
+import { getFromDB, saveToDB } from "./utils/db";
 import ProductCard from "./components/ProductCard";
 import ProductDetailModal from "./components/ProductDetailModal";
 import ImageConfigModal from "./components/ImageConfigModal";
@@ -74,27 +75,31 @@ export default function App() {
   const fetchProducts = async (autoSyncIfEmpty = true) => {
     setLoading(true);
     try {
-      // Try local storage cache first for instant/offline loading
-      const cachedProducts = localStorage.getItem("maraca_flu_products");
+      // Clean up legacy localStorage products cache if it exists to free up quota
+      if (localStorage.getItem("maraca_flu_products")) {
+        try {
+          localStorage.removeItem("maraca_flu_products");
+        } catch (e) {
+          console.warn(e);
+        }
+      }
+
+      // Try IndexedDB cache first for instant/offline loading of large datasets (prevents QuotaExceededError)
+      const cachedProducts = await getFromDB<GroupedProduct[]>("maraca_flu_products");
       const cachedLastUpdated = localStorage.getItem("maraca_flu_last_updated");
       const cachedFileName = localStorage.getItem("maraca_flu_file_name");
       const cachedTotalCount = localStorage.getItem("maraca_flu_total_count");
 
-      if (cachedProducts) {
-        try {
-          const parsed = JSON.parse(cachedProducts);
-          setProducts(parsed);
-          setLastUpdated(cachedLastUpdated);
-          setFileName(cachedFileName);
-          setTotalCount(cachedTotalCount ? parseInt(cachedTotalCount, 10) : parsed.length);
-          setLoading(false);
-          return;
-        } catch (e) {
-          console.error("Failed to parse cached products, refetching...", e);
-        }
+      if (cachedProducts && cachedProducts.length > 0) {
+        setProducts(cachedProducts);
+        setLastUpdated(cachedLastUpdated);
+        setFileName(cachedFileName);
+        setTotalCount(cachedTotalCount ? parseInt(cachedTotalCount, 10) : cachedProducts.length);
+        setLoading(false);
+        return;
       }
 
-      // Fallback to fetch from backend if localStorage is empty
+      // Fallback to fetch from backend if cache is empty
       const res = await fetch("/api/products");
       if (res.ok) {
         const data = await res.json();
@@ -104,9 +109,9 @@ export default function App() {
         setFileName(data.fileName || null);
         setTotalCount(data.totalCount || 0);
 
-        // Store in localStorage for future offline access
+        // Store in IndexedDB for future offline access
         if (productsList.length > 0) {
-          localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+          await saveToDB("maraca_flu_products", productsList);
           if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
           if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
           localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
@@ -431,8 +436,8 @@ export default function App() {
       setFileName(resolvedFileName);
       setTotalCount(productsList.length);
       
-      // Save locally
-      localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+      // Save locally (IndexedDB for products, localStorage for metadata)
+      await saveToDB("maraca_flu_products", productsList);
       localStorage.setItem("maraca_flu_last_updated", nowStr);
       localStorage.setItem("maraca_flu_file_name", resolvedFileName);
       localStorage.setItem("maraca_flu_total_count", String(productsList.length));
@@ -487,8 +492,8 @@ export default function App() {
         setFileName(data.fileName || null);
         setTotalCount(data.totalCount || 0);
 
-        // Update client storage
-        localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+        // Update client storage (IndexedDB for products, localStorage for metadata)
+        await saveToDB("maraca_flu_products", productsList);
         if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
         if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
         localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
