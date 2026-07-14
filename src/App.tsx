@@ -539,30 +539,7 @@ export default function App() {
       return;
     }
 
-    // Detect if we are running in a serverless environment (like Vercel)
-    const isVercelHost = typeof window !== "undefined" && (
-      window.location.hostname.includes("vercel.app") || 
-      window.location.hostname.includes("fluminense-consulta")
-    );
-
     setSyncing(true);
-
-    if (isVercelHost) {
-      // Direct client-side sync on Vercel to bypass the 10-second Serverless Function execution timeout limit
-      setServerSyncing(false);
-      try {
-        await runClientSideSync(isManual);
-      } catch (err: any) {
-        console.error("Direct Vercel client-side sync failed:", err);
-        if (isManual) {
-          setSyncError(err.message || "Falha na sincronização pelo navegador.");
-        }
-      } finally {
-        setSyncing(false);
-      }
-      return;
-    }
-
     setServerSyncing(true);
     if (isManual) {
       setSyncError(null);

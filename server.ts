@@ -157,38 +157,117 @@ async function fetchFileFromGoogleDrive(fileId: string): Promise<Buffer> {
   throw new Error("O arquivo retornado pelo Google Drive não pôde ser baixado ou não é uma planilha válida (formato inválido). Certifique-se de que a planilha está compartilhada publicamente como 'Qualquer pessoa com o link'.");
 }
 
+// Custom high-performance CSV parser that handles quotes and delimiters
+function parseCSV(text: string): string[][] {
+  const firstLineEnd = text.indexOf('\n');
+  const firstLine = firstLineEnd !== -1 ? text.substring(0, firstLineEnd) : text;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  const semicolonCount = (firstLine.match(/;/g) || []).length;
+  const delimiter = semicolonCount > commaCount ? ';' : ',';
+
+  const rows: string[][] = [];
+  let currentLine: string[] = [];
+  let currentCell = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i+1];
+    
+    if (inQuotes) {
+      if (char === '"') {
+        if (nextChar === '"') {
+          currentCell += '"';
+          i++; // Skip next quote
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        currentCell += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === delimiter) {
+        currentLine.push(currentCell);
+        currentCell = '';
+      } else if (char === '\n' || char === '\r') {
+        currentLine.push(currentCell);
+        if (currentLine.length > 1 || (currentLine.length === 1 && currentLine[0] !== '')) {
+          rows.push(currentLine);
+        }
+        currentLine = [];
+        currentCell = '';
+        if (char === '\r' && nextChar === '\n') {
+          i++; // Skip LF
+        }
+      } else {
+        currentCell += char;
+      }
+    }
+  }
+  if (currentCell !== '' || currentLine.length > 0) {
+    currentLine.push(currentCell);
+    rows.push(currentLine);
+  }
+  return rows;
+}
+
 // Core database synchronization function from Google Drive
 async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; fileName: string; totalCount: number; products: any[] }> {
   const { id: targetFileId, name: targetFileName } = await getGoogleDriveFileId();
+  let rawRows: any[][] = [];
+  let parsedViaCSV = false;
 
-  // 2. Download the file contents using the robust multi-source downloader
-  const buffer = await fetchFileFromGoogleDrive(targetFileId);
-
-  // 3. Parse with SheetJS (XLSX) - OPTIMIZED FOR LARGE DATASETS
-  const metaWorkbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
-  if (metaWorkbook.SheetNames.length === 0) {
-    throw new Error("O arquivo Excel baixado está vazio.");
+  // Attempt 1: Fast CSV export download & parse (takes <2 seconds end-to-end, completely safe from 10s serverless timeout)
+  console.log("[Sync] Attempting lightning-fast CSV sync...");
+  try {
+    const csvUrl = `https://docs.google.com/spreadsheets/d/${targetFileId}/export?format=csv`;
+    const csvRes = await fetchWithRetry(csvUrl, 2, 800);
+    const csvText = await csvRes.text();
+    
+    if (csvText.length > 100 && !csvText.trim().startsWith("<!DOCTYPE") && (csvText.toLowerCase().includes("referencia") || csvText.toLowerCase().includes("descri") || csvText.toLowerCase().includes("codigo"))) {
+      console.log(`[Sync] Valid CSV received (${csvText.length} characters). Parsing...`);
+      rawRows = parseCSV(csvText);
+      parsedViaCSV = true;
+      console.log(`[Sync] CSV parsing completed. Row count: ${rawRows.length}`);
+    } else {
+      console.warn("[Sync] Received invalid CSV response (looks like HTML or empty). Falling back to XLSX...");
+    }
+  } catch (csvErr) {
+    console.warn("[Sync] Fast CSV sync failed, falling back to XLSX sync. Error:", csvErr);
   }
 
-  const sheetName = metaWorkbook.SheetNames[0];
-  const workbook = XLSX.read(buffer, {
-    type: "buffer",
-    sheets: [sheetName],
-    cellFormula: false,
-    cellHTML: false,
-    cellNF: false,
-    cellStyles: false,
-    cellText: false,
-  });
+  // Attempt 2: Fallback to binary XLSX downloading & SheetJS parsing
+  if (!parsedViaCSV) {
+    console.log("[Sync] Executing fallback XLSX download & SheetJS parse (might hit 10s serverless timeout)...");
+    const buffer = await fetchFileFromGoogleDrive(targetFileId);
+    
+    const metaWorkbook = XLSX.read(buffer, { type: "buffer", bookSheets: true });
+    if (metaWorkbook.SheetNames.length === 0) {
+      throw new Error("O arquivo Excel baixado está vazio.");
+    }
 
-  const worksheet = workbook.Sheets[sheetName];
-  const rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, {
-    header: 1,
-    raw: true, // Faster raw value extraction
-  });
+    const sheetName = metaWorkbook.SheetNames[0];
+    const workbook = XLSX.read(buffer, {
+      type: "buffer",
+      sheets: [sheetName],
+      cellFormula: false,
+      cellHTML: false,
+      cellNF: false,
+      cellStyles: false,
+      cellText: false,
+    });
+
+    const worksheet = workbook.Sheets[sheetName];
+    rawRows = XLSX.utils.sheet_to_json<any[]>(worksheet, {
+      header: 1,
+      raw: true, // Faster raw value extraction
+    });
+  }
 
   if (rawRows.length === 0) {
-    throw new Error("Nenhum dado encontrado na primeira planilha.");
+    throw new Error("Nenhum dado encontrado na planilha.");
   }
 
   // 4. Group products by Referência and Cor, sum sales
