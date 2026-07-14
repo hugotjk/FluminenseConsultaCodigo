@@ -91,88 +91,12 @@ app.post("/api/image-config", (req, res) => {
 
 // Helper to resolve Google Drive file ID and name
 async function getGoogleDriveFileId(): Promise<{ id: string; name: string }> {
-  const folderId = "1Fsec9Mlh1-ktpuIN3DOOC_A0IakfWd13";
+  // Use the direct sheet ID provided by the user
   const defaultFileId = "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
-  let targetFileId = "";
-  let targetFileName = "Base Maraca Flu.xlsx";
+  const defaultFileName = "Base Maraca Flu.xlsx";
 
-  console.log("Fetching public Google Drive folder page...");
-  try {
-    const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
-    const folderRes = await fetch(folderUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, bg=Gecko) Chrome/115.0.0.0 Safari/537.36"
-      }
-    });
-
-    if (folderRes.ok) {
-      const html = await folderRes.text();
-      const pattern = /window\['_DRIVE_ivd'\]\s*=\s*'([^']*)'/;
-      const match = html.match(pattern);
-
-      if (match) {
-        const hexEncoded = match[1];
-        const decoded = hexEncoded.replace(/\\x([0-9a-fA-F]{2})/g, (m, g1) => {
-          return String.fromCharCode(parseInt(g1, 16));
-        });
-        try {
-          const parsed = JSON.parse(decoded);
-          if (Array.isArray(parsed) && Array.isArray(parsed[0])) {
-            const files = parsed[0];
-            // Filter files whose name contains 'Base Maraca Flu' and is an xlsx
-            const matchedFiles = files.filter((f: any) => {
-              const name = String(f[2] || "");
-              return name.includes("Base Maraca Flu") && name.endsWith(".xlsx");
-            });
-
-            if (matchedFiles.length > 0) {
-              // Sort by modified time (index 10) descending to get the newest
-              matchedFiles.sort((a: any, b: any) => {
-                const timeA = a[10] || 0;
-                const timeB = b[10] || 0;
-                return timeB - timeA;
-              });
-              targetFileId = matchedFiles[0][0];
-              targetFileName = matchedFiles[0][2];
-              console.log(`Found file in public folder: ${targetFileName} (ID: ${targetFileId})`);
-            }
-          }
-        } catch (parseErr) {
-          console.error("Error parsing folder data from HTML:", parseErr);
-        }
-      }
-
-      // Fallback if scraping window['_DRIVE_ivd'] failed or couldn't find file:
-      if (!targetFileId) {
-        console.log("Attempting fallback direct regex match for file ID and name...");
-        const regexId = /data-id="([a-zA-Z0-9_-]{33})"/g;
-        const allIds: string[] = [];
-        let m;
-        while ((m = regexId.exec(html)) !== null) {
-          if (!allIds.includes(m[1]) && m[1] !== folderId) {
-            allIds.push(m[1]);
-          }
-        }
-        if (allIds.length > 0) {
-          targetFileId = allIds[0];
-          console.log(`Fallback picked first found file ID: ${targetFileId}`);
-        }
-      }
-    } else {
-      console.warn(`Google Drive folder page returned status ${folderRes.status}. Falling back to default.`);
-    }
-  } catch (err) {
-    console.warn("Failed to scrape folder page (this is normal in Vercel/serverless due to rate limits):", err);
-  }
-
-  // Final fallback to the proven file ID
-  if (!targetFileId) {
-    console.log(`Using default hardcoded file ID: ${defaultFileId}`);
-    targetFileId = defaultFileId;
-    targetFileName = "Base Maraca Flu.xlsx (Direto)";
-  }
-
-  return { id: targetFileId, name: targetFileName };
+  console.log(`Using direct file ID: ${defaultFileId}`);
+  return { id: defaultFileId, name: defaultFileName };
 }
 
 // Core database synchronization function from Google Drive
@@ -428,42 +352,31 @@ async function syncDatabase(): Promise<{ success: boolean; lastUpdated: string; 
 
 let isSyncing = false;
 
-// Sync database from Google Drive without authentication (runs asynchronously in background to prevent timeout)
+// Sync database from Google Drive without authentication (runs synchronously to support serverless / Vercel execution context)
 app.post("/api/sync", async (req, res) => {
   if (isSyncing) {
-    return res.json({
-      success: true,
-      status: "syncing",
-      message: "A sincronização da planilha já está em andamento no servidor em segundo plano..."
-    });
+    return res.status(409).json({ error: "Sincronização já em andamento. Aguarde alguns instantes." });
   }
 
   isSyncing = true;
-  console.log("Triggering server-side background sync from /api/sync...");
+  console.log("Starting server-side synchronous sync from /api/sync...");
   
-  // Start sync in background without awaiting
-  syncDatabase()
-    .then((result) => {
-      console.log(`Server-side background sync finished successfully. Count: ${result.totalCount}`);
-    })
-    .catch((err) => {
-      console.error("Server-side background sync failed:", err);
-    })
-    .finally(() => {
-      isSyncing = false;
-    });
-
-  return res.json({
-    success: true,
-    status: "started",
-    message: "Sincronização iniciada no servidor em segundo plano..."
-  });
+  try {
+    const result = await syncDatabase();
+    console.log(`Server-side sync finished successfully. Count: ${result.totalCount}`);
+    return res.json(result);
+  } catch (err: any) {
+    console.error("Server-side sync failed:", err);
+    return res.status(500).json({ error: err.message || "Erro interno durante a sincronização" });
+  } finally {
+    isSyncing = false;
+  }
 });
 
-// Endpoint to check background sync status
+// Endpoint to check background sync status (kept for compatibility, always returning not syncing now that it is synchronous)
 app.get("/api/sync-status", (req, res) => {
   res.json({
-    isSyncing,
+    isSyncing: false,
     lastUpdated: fs.existsSync(PRODUCTS_FILE) ? fs.statSync(PRODUCTS_FILE).mtime.toISOString() : null
   });
 });

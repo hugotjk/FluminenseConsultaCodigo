@@ -445,7 +445,7 @@ export default function App() {
     setServerSyncing(true);
     if (isManual) {
       setSyncError(null);
-      setSyncMessage("Solicitando sincronização ao servidor...");
+      setSyncMessage("Sincronizando planilha com o servidor (baixa e processa)...");
     }
 
     try {
@@ -459,58 +459,30 @@ export default function App() {
 
       const data = await res.json();
       if (data.success) {
+        const productsList = data.products || [];
+        setProducts(productsList);
+        setLastUpdated(data.lastUpdated || null);
+        setFileName(data.fileName || null);
+        setTotalCount(data.totalCount || 0);
+
+        // Update client storage
+        localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
+        if (data.lastUpdated) localStorage.setItem("maraca_flu_last_updated", data.lastUpdated);
+        if (data.fileName) localStorage.setItem("maraca_flu_file_name", data.fileName);
+        localStorage.setItem("maraca_flu_total_count", String(data.totalCount || productsList.length));
+
         if (isManual) {
-          setSyncMessage(data.message || "Sincronização em andamento no servidor...");
+          setSyncMessage("Sincronização concluída com sucesso!");
+          setTimeout(() => setSyncMessage(null), 3000);
         }
-
-        // Start polling the server's sync status
-        const intervalId = setInterval(async () => {
-          try {
-            const statusRes = await fetch("/api/sync-status");
-            if (statusRes.ok) {
-              const statusData = await statusRes.json();
-              if (!statusData.isSyncing) {
-                // Background sync finished! Clear interval and fetch fresh products
-                clearInterval(intervalId);
-                setServerSyncing(false);
-                setSyncing(false);
-                
-                if (isManual) {
-                  setSyncMessage("Sincronização concluída! Atualizando produtos...");
-                }
-                
-                const prodRes = await fetch("/api/products");
-                if (prodRes.ok) {
-                  const prodData = await prodRes.json();
-                  const productsList = prodData.products || [];
-                  setProducts(productsList);
-                  setLastUpdated(prodData.lastUpdated || null);
-                  setFileName(prodData.fileName || null);
-                  setTotalCount(prodData.totalCount || 0);
-
-                  // Update client storage
-                  localStorage.setItem("maraca_flu_products", JSON.stringify(productsList));
-                  if (prodData.lastUpdated) localStorage.setItem("maraca_flu_last_updated", prodData.lastUpdated);
-                  if (prodData.fileName) localStorage.setItem("maraca_flu_file_name", prodData.fileName);
-                  localStorage.setItem("maraca_flu_total_count", String(prodData.totalCount || productsList.length));
-                }
-                
-                if (isManual) {
-                  setTimeout(() => setSyncMessage(null), 3000);
-                }
-              }
-            }
-          } catch (pollErr) {
-            console.error("Erro ao verificar status de sincronização:", pollErr);
-          }
-        }, 4000);
       } else {
-        throw new Error(data.message || "Falha ao iniciar sincronização");
+        throw new Error(data.error || "Falha ao sincronizar");
       }
     } catch (err: any) {
       console.error("Erro ao sincronizar pelo servidor, tentando processamento local...", err);
       // Fallback to client-side sync in case the server is offline or fails
       await runClientSideSync(isManual);
+    } finally {
       setServerSyncing(false);
       setSyncing(false);
     }
