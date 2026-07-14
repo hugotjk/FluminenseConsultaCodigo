@@ -99,45 +99,62 @@ async function getGoogleDriveFileId(): Promise<{ id: string; name: string }> {
   return { id: defaultFileId, name: defaultFileName };
 }
 
+// Helper to fetch a URL with timeout, retries, and browser headers
+async function fetchWithRetry(url: string, retries = 3, delayMs = 1000): Promise<Response> {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+  };
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      console.log(`[Google Drive] Fetching (Attempt ${i + 1}/${retries}): ${url}`);
+      const res = await fetch(url, { headers });
+      if (res.ok) {
+        return res;
+      }
+      console.warn(`[Google Drive] Attempt ${i + 1} returned status ${res.status}: ${res.statusText}`);
+    } catch (err) {
+      console.warn(`[Google Drive] Attempt ${i + 1} threw error:`, err);
+    }
+    if (i < retries - 1) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw new Error(`Failed to fetch from ${url} after ${retries} attempts`);
+}
+
 // Robust downloader that automatically handles both native Google Sheets and uploaded Excel files (.xlsx)
 async function fetchFileFromGoogleDrive(fileId: string): Promise<Buffer> {
   const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
   const exportUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`;
+  const exportGidUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?gid=0&format=xlsx`;
 
-  // 1. Try the direct download URL first (works for raw Excel uploads, which contain &rtpof=true)
-  console.log(`[Google Drive] Trying direct download URL for binary Excel uploads: ${directUrl}`);
-  try {
-    const directRes = await fetch(directUrl);
-    if (directRes.ok) {
-      const arrayBuffer = await directRes.arrayBuffer();
+  const urlsToTry = [
+    { url: directUrl, desc: "direct download URL for binary Excel uploads" },
+    { url: exportUrl, desc: "export URL for native Google Sheets" },
+    { url: exportGidUrl, desc: "explicit sheet export URL" }
+  ];
+
+  for (const item of urlsToTry) {
+    console.log(`[Google Drive] Trying ${item.desc}: ${item.url}`);
+    try {
+      const res = await fetchWithRetry(item.url, 2, 800);
+      const arrayBuffer = await res.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       // Check for ZIP/XLSX magic bytes (0x50 0x4B) to ensure it is a valid XLSX file and not an HTML login/error page
       if (buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4B) {
-        console.log("[Google Drive] Direct download succeeded. Valid ZIP/XLSX file received.");
+        console.log(`[Google Drive] Success using ${item.desc}. Valid ZIP/XLSX file received.`);
         return buffer;
       }
-      console.log("[Google Drive] Direct download returned a non-XLSX response (missing ZIP magic bytes).");
-    } else {
-      console.log(`[Google Drive] Direct download failed with status ${directRes.status}: ${directRes.statusText}`);
+      console.log(`[Google Drive] ${item.desc} returned a non-XLSX response (missing ZIP magic bytes). Length: ${buffer.length}`);
+    } catch (err) {
+      console.error(`[Google Drive] Error attempting ${item.desc}:`, err);
     }
-  } catch (err) {
-    console.error("[Google Drive] Error attempting direct download:", err);
   }
 
-  // 2. Try the export URL as a fallback (works for native Google Sheets)
-  console.log(`[Google Drive] Trying export URL for native Google Sheets: ${exportUrl}`);
-  const exportRes = await fetch(exportUrl);
-  if (!exportRes.ok) {
-    throw new Error(`Google Drive returned status ${exportRes.status}: ${exportRes.statusText}`);
-  }
-  const arrayBuffer = await exportRes.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  if (buffer.length > 4 && buffer[0] === 0x50 && buffer[1] === 0x4B) {
-    console.log("[Google Drive] Export download succeeded. Valid ZIP/XLSX file received.");
-    return buffer;
-  }
-
-  throw new Error("O arquivo retornado pelo Google Drive não é uma planilha válida (formato inválido). Certifique-se de que a planilha está compartilhada publicamente como 'Qualquer pessoa com o link'.");
+  throw new Error("O arquivo retornado pelo Google Drive não pôde ser baixado ou não é uma planilha válida (formato inválido). Certifique-se de que a planilha está compartilhada publicamente como 'Qualquer pessoa com o link'.");
 }
 
 // Core database synchronization function from Google Drive
