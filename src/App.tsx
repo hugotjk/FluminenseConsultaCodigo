@@ -111,14 +111,19 @@ export default function App() {
         console.log("App: Tentando carregar do backend (/api/products)...");
         const res = await fetch("/api/products");
         if (res.ok) {
-          const data = await res.json();
-          productsList = data.products || [];
-          lastUpdatedVal = data.lastUpdated || null;
-          fileNameVal = data.fileName || null;
-          totalCountVal = data.totalCount || 0;
-          if (productsList.length > 0) {
-            loadedSuccessfully = true;
-            console.log("App: Carregado com sucesso do backend!");
+          const contentType = res.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const data = await res.json();
+            productsList = data.products || [];
+            lastUpdatedVal = data.lastUpdated || null;
+            fileNameVal = data.fileName || null;
+            totalCountVal = data.totalCount || 0;
+            if (productsList.length > 0) {
+              loadedSuccessfully = true;
+              console.log("App: Carregado com sucesso do backend!");
+            }
+          } else {
+            console.warn("App: /api/products não retornou JSON.");
           }
         }
       } catch (backendErr) {
@@ -179,9 +184,14 @@ export default function App() {
 
       const res = await fetch("/api/image-config");
       if (res.ok) {
-        const config = await res.json();
-        setImageConfig(config);
-        localStorage.setItem("maraca_flu_image_config", JSON.stringify(config));
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.includes("application/json")) {
+          const config = await res.json();
+          setImageConfig(config);
+          localStorage.setItem("maraca_flu_image_config", JSON.stringify(config));
+        } else {
+          console.warn("App: /api/image-config não retornou JSON.");
+        }
       }
     } catch (err) {
       console.error("Erro ao carregar configuração de imagem:", err);
@@ -539,6 +549,10 @@ export default function App() {
         if (!infoRes.ok) {
           throw new Error(`Falha ao obter informações do arquivo via proxy: ${infoRes.statusText}`);
         }
+        const contentType = infoRes.headers.get("content-type");
+        if (!contentType || !contentType.includes("application/json")) {
+          throw new Error("O servidor retornou uma página de erro (esperava JSON). Certifique-se de que o backend está ativo.");
+        }
         const info = await infoRes.json();
         const { totalParts, chunkSize, fileName: infoFileName, totalLength } = info;
         resolvedFileName = infoFileName || resolvedFileName;
@@ -637,6 +651,11 @@ export default function App() {
 
       if (!res.ok) {
         throw new Error(`Servidor retornou status ${res.status}`);
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (!contentType || !contentType.includes("application/json")) {
+        throw new Error("O servidor retornou uma resposta inválida ou página HTML (esperava JSON). Isso pode ocorrer se o servidor estiver carregando ou em manutenção.");
       }
 
       const data = await res.json();

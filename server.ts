@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import compression from "compression";
 import * as XLSX from "xlsx";
-import { createServer as createViteServer } from "vite";
 import { saveProductsToFirestore, loadProductsFromFirestore } from "./src/utils/firebase";
 
 const app = express();
@@ -674,6 +673,7 @@ app.get("/api/download-excel", async (req, res) => {
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     // Integrate Vite in development mode
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
