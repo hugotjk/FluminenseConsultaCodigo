@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { Search, ChevronDown, Check, X } from "lucide-react";
 
 interface SearchableSelectProps {
@@ -9,6 +10,7 @@ interface SearchableSelectProps {
   options: Array<[string, { count: number; sales: number }]>;
   placeholder?: string;
   allLabelSales: number;
+  align?: "left" | "right";
 }
 
 export default function SearchableSelect({
@@ -19,23 +21,67 @@ export default function SearchableSelect({
   options,
   placeholder = "TODOS",
   allLabelSales,
+  align = "left",
 }: SearchableSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
 
-  // Close when clicking outside
+  // Close when clicking outside (including clicking outside of portal)
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+      const target = event.target as Node;
+      if (containerRef.current && containerRef.current.contains(target)) {
+        return;
       }
+      if (dropdownRef.current && dropdownRef.current.contains(target)) {
+        return;
+      }
+      setIsOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, []);
+
+  // Update dropdown coordinates relative to the screen/body
+  useEffect(() => {
+    if (!isOpen) return;
+
+    function updateCoords() {
+      if (buttonRef.current) {
+        const rect = buttonRef.current.getBoundingClientRect();
+        const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+        
+        // Calculate the ideal left position
+        const leftVal = align === "right" ? rect.right + scrollX - 256 : rect.left + scrollX;
+        // Keep inside the viewport bounds with a 10px padding
+        const computedLeft = Math.max(10, Math.min(window.innerWidth - 266, leftVal));
+
+        setCoords({
+          top: rect.bottom + scrollY,
+          left: computedLeft,
+          width: rect.width,
+        });
+      }
+    }
+
+    updateCoords();
+    
+    // Listen to scroll and resize to keep positioned correctly
+    window.addEventListener("scroll", updateCoords, true);
+    window.addEventListener("resize", updateCoords);
+
+    return () => {
+      window.removeEventListener("scroll", updateCoords, true);
+      window.removeEventListener("resize", updateCoords);
+    };
+  }, [isOpen, align]);
 
   // Filter options based on search term
   const filteredOptions = useMemo(() => {
@@ -59,10 +105,11 @@ export default function SearchableSelect({
   };
 
   return (
-    <div className="w-full" ref={containerRef}>
+    <div className="min-w-[120px] max-w-[240px] shrink-0 relative" ref={containerRef}>
       <div className="relative">
         {/* Trigger Button */}
         <button
+          ref={buttonRef}
           type="button"
           onClick={() => {
             setIsOpen(!isOpen);
@@ -73,13 +120,22 @@ export default function SearchableSelect({
           }`}
         >
           <div className="flex items-center gap-1.5 truncate mr-2">
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1 select-none">
-              {icon}
-              {label}:
-            </span>
-            <span className="truncate font-bold text-slate-700">
-              {value ? `${value} (${options.find(([opt]) => opt === value)?.[1]?.sales || 0} un.)` : `${placeholder} (${allLabelSales} un.)`}
-            </span>
+            {value ? (
+              <>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1 select-none">
+                  {icon}
+                  {label}:
+                </span>
+                <span className="truncate font-bold text-slate-700">
+                  {value}
+                </span>
+              </>
+            ) : (
+              <span className="truncate font-bold text-slate-600 flex items-center gap-1.5">
+                {icon}
+                {label}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
             {value && (
@@ -98,9 +154,17 @@ export default function SearchableSelect({
           </div>
         </button>
 
-        {/* Dropdown Menu */}
-        {isOpen && (
-          <div className="absolute z-50 left-0 right-0 mt-1.5 bg-white border border-slate-150 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.1)] overflow-hidden flex flex-col max-h-64 animate-fade-in">
+        {/* Dropdown Menu via Portal to escape parent overflows */}
+        {isOpen && coords && createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              position: "absolute",
+              top: `${coords.top}px`,
+              left: `${coords.left}px`,
+            }}
+            className="z-[9999] mt-1.5 bg-white border border-slate-150 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.15)] overflow-hidden flex flex-col w-64 max-h-64 animate-fade-in"
+          >
             {/* Search Input Box */}
             <div className="p-2 border-b border-slate-100 flex items-center gap-1.5 bg-slate-50/50 sticky top-0 shrink-0">
               <Search size={13} className="text-slate-400 ml-1.5 shrink-0" />
@@ -132,14 +196,14 @@ export default function SearchableSelect({
                     !value ? "bg-emerald-50/50 text-flu-verde" : "text-slate-600 hover:bg-slate-50"
                   }`}
                 >
-                  <span className="uppercase">{placeholder} ({allLabelSales} un.)</span>
+                  <span className="uppercase">TODOS</span>
                   {!value && <Check size={13} className="text-flu-verde shrink-0" />}
                 </div>
               )}
 
               {/* Filtered Custom Options */}
               {filteredOptions.length > 0 ? (
-                filteredOptions.map(([opt, stats]) => {
+                filteredOptions.map(([opt]) => {
                   const isSelected = value === opt;
                   return (
                     <div
@@ -152,10 +216,7 @@ export default function SearchableSelect({
                       }`}
                     >
                       <span className="truncate pr-4">{opt}</span>
-                      <div className="flex items-center gap-1.5 shrink-0 font-mono text-[10px] text-slate-400">
-                        <span>{stats.sales} un.</span>
-                        {isSelected && <Check size={13} className="text-flu-verde shrink-0" />}
-                      </div>
+                      {isSelected && <Check size={13} className="text-flu-verde shrink-0" />}
                     </div>
                   );
                 })
@@ -165,7 +226,8 @@ export default function SearchableSelect({
                 </div>
               )}
             </div>
-          </div>
+          </div>,
+          document.body
         )}
       </div>
     </div>

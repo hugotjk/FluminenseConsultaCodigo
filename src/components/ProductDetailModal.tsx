@@ -98,7 +98,7 @@ export default function ProductDetailModal({ product, imageConfig, onClose }: Pr
   return (
     <div 
       onClick={onClose}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-backdrop-in cursor-pointer"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 animate-backdrop-in cursor-pointer"
     >
       <div
         id="product-detail-modal"

@@ -1040,7 +1040,7 @@ export default function App() {
           </div>
 
           {/* Dynamic Cascading Filters */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="flex flex-nowrap overflow-x-auto gap-2.5 pb-2 pt-1 scrollbar-none -mx-4 px-4 sm:mx-0 sm:px-0">
             <SearchableSelect
               label="Fornecedor"
               icon={<Layers size={11} />}
@@ -1066,6 +1066,7 @@ export default function App() {
               onChange={setSelectedGrupo}
               options={grupoOptions}
               allLabelSales={totalGrupoSales}
+              align="right"
             />
 
             <SearchableSelect
@@ -1075,6 +1076,7 @@ export default function App() {
               onChange={setSelectedLinha}
               options={linhaOptions}
               allLabelSales={totalLinhaSales}
+              align="right"
             />
           </div>
 
