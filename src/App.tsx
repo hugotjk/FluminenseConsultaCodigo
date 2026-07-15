@@ -23,6 +23,54 @@ import ProductDetailModal from "./components/ProductDetailModal";
 import ImageConfigModal from "./components/ImageConfigModal";
 import SearchableSelect from "./components/SearchableSelect";
 
+// Helper to extract Google Drive / Google Sheets File ID from any URL or format
+function extractGoogleDriveId(input: string): string {
+  if (!input) return "";
+  const trimmed = input.trim();
+  
+  // Try matching standard Google Sheets format: /spreadsheets/d/{ID}/...
+  const sheetsRegex = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
+  const sheetsMatch = trimmed.match(sheetsRegex);
+  if (sheetsMatch && sheetsMatch[1]) {
+    return sheetsMatch[1];
+  }
+  
+  // Try matching standard Google Drive file format: /file/d/{ID}/...
+  const fileRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
+  const fileMatch = trimmed.match(fileRegex);
+  if (fileMatch && fileMatch[1]) {
+    return fileMatch[1];
+  }
+
+  // Try matching query parameter id: ?id={ID}
+  const idParamRegex = /[?&]id=([a-zA-Z0-9-_]+)/;
+  const idParamMatch = trimmed.match(idParamRegex);
+  if (idParamMatch && idParamMatch[1]) {
+    return idParamMatch[1];
+  }
+
+  // Try matching folders: /folders/{ID}
+  const folderRegex = /\/folders\/([a-zA-Z0-9-_]+)/;
+  const folderMatch = trimmed.match(folderRegex);
+  if (folderMatch && folderMatch[1]) {
+    return folderMatch[1];
+  }
+
+  // If it doesn't look like a URL (no slashes, or just a code), return it directly
+  if (!trimmed.includes("/") && !trimmed.includes(".")) {
+    return trimmed;
+  }
+  
+  // Last resort fallback for raw base64url typical keys (28-60 chars)
+  const fallbackRegex = /\b([a-zA-Z0-9-_]{28,60})\b/;
+  const fallbackMatch = trimmed.match(fallbackRegex);
+  if (fallbackMatch && fallbackMatch[1]) {
+    return fallbackMatch[1];
+  }
+
+  return trimmed;
+}
+
 export default function App() {
   // Products and cache state
   const [products, setProducts] = useState<GroupedProduct[]>([]);
@@ -458,7 +506,7 @@ export default function App() {
           lastUpdated: nowStr,
           totalCount: productsList.length,
           fileName: resolvedFileName,
-          fileId: imageConfig.spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u"
+          fileId: extractGoogleDriveId(imageConfig.spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u")
         });
         console.log("App: Dados salvos com sucesso no Firestore diretamente do navegador!");
       } catch (firestoreErr) {
@@ -486,7 +534,7 @@ export default function App() {
       let arrayBuffer: ArrayBuffer | null = null;
       let resolvedFileName = "Base Maraca Flu.xlsx";
       
-      const fileId = imageConfig.spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u";
+      const fileId = extractGoogleDriveId(imageConfig.spreadsheetId || "1oTpB5GtJ6WwEnlhF2LhBcuH5lvw9c7_u");
       const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
 
       // TENTATIVA 1: Download direto do Google Drive no navegador (CORS) - Super rápido, ignora limites da Vercel!

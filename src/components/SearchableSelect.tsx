@@ -48,23 +48,21 @@ export default function SearchableSelect({
     };
   }, []);
 
-  // Update dropdown coordinates relative to the screen/body
+  // Update dropdown coordinates relative to the viewport (fixed position)
   useEffect(() => {
     if (!isOpen) return;
 
     function updateCoords() {
       if (buttonRef.current) {
         const rect = buttonRef.current.getBoundingClientRect();
-        const scrollY = window.pageYOffset || document.documentElement.scrollTop;
-        const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
         
-        // Calculate the ideal left position
-        const leftVal = align === "right" ? rect.right + scrollX - 256 : rect.left + scrollX;
+        // Calculate the ideal left position relative to viewport
+        const leftVal = align === "right" ? rect.right - 256 : rect.left;
         // Keep inside the viewport bounds with a 10px padding
         const computedLeft = Math.max(10, Math.min(window.innerWidth - 266, leftVal));
 
         setCoords({
-          top: rect.bottom + scrollY,
+          top: rect.bottom,
           left: computedLeft,
           width: rect.width,
         });
@@ -159,7 +157,7 @@ export default function SearchableSelect({
           <div
             ref={dropdownRef}
             style={{
-              position: "absolute",
+              position: "fixed",
               top: `${coords.top}px`,
               left: `${coords.left}px`,
             }}
@@ -188,16 +186,16 @@ export default function SearchableSelect({
 
             {/* Options List */}
             <div className="overflow-y-auto divide-y divide-slate-50/60 max-h-48 shrink flex-1">
-              {/* Option "TODOS" */}
-              {!searchTerm && (
+              {/* Option "Limpar Seleção" shown only if there is an active selection */}
+              {value && !searchTerm && (
                 <div
                   onClick={() => handleSelect("")}
-                  className={`flex items-center justify-between px-3.5 py-2.5 text-xs font-bold cursor-pointer transition-colors ${
-                    !value ? "bg-emerald-50/50 text-flu-verde" : "text-slate-600 hover:bg-slate-50"
-                  }`}
+                  className="flex items-center justify-between px-3.5 py-2.5 text-xs font-bold cursor-pointer text-rose-600 hover:bg-rose-50/50 transition-colors border-b border-slate-100"
                 >
-                  <span className="uppercase">TODOS</span>
-                  {!value && <Check size={13} className="text-flu-verde shrink-0" />}
+                  <span className="uppercase flex items-center gap-1.5">
+                    <X size={12} className="shrink-0" />
+                    Limpar Seleção
+                  </span>
                 </div>
               )}
 

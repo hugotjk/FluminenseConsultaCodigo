@@ -2,6 +2,54 @@ import React, { useState, useRef } from "react";
 import { ImageConfig } from "../types";
 import { X, Save, Settings, HelpCircle, AlertCircle, Database, Image, UploadCloud, RefreshCw, CheckCircle2 } from "lucide-react";
 
+// Helper to extract Google Drive / Google Sheets File ID from any URL or format
+function extractGoogleDriveId(input: string): string {
+  if (!input) return "";
+  const trimmed = input.trim();
+  
+  // Try matching standard Google Sheets format: /spreadsheets/d/{ID}/...
+  const sheetsRegex = /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/;
+  const sheetsMatch = trimmed.match(sheetsRegex);
+  if (sheetsMatch && sheetsMatch[1]) {
+    return sheetsMatch[1];
+  }
+  
+  // Try matching standard Google Drive file format: /file/d/{ID}/...
+  const fileRegex = /\/file\/d\/([a-zA-Z0-9-_]+)/;
+  const fileMatch = trimmed.match(fileRegex);
+  if (fileMatch && fileMatch[1]) {
+    return fileMatch[1];
+  }
+
+  // Try matching query parameter id: ?id={ID}
+  const idParamRegex = /[?&]id=([a-zA-Z0-9-_]+)/;
+  const idParamMatch = trimmed.match(idParamRegex);
+  if (idParamMatch && idParamMatch[1]) {
+    return idParamMatch[1];
+  }
+
+  // Try matching folders: /folders/{ID}
+  const folderRegex = /\/folders\/([a-zA-Z0-9-_]+)/;
+  const folderMatch = trimmed.match(folderRegex);
+  if (folderMatch && folderMatch[1]) {
+    return folderMatch[1];
+  }
+
+  // If it doesn't look like a URL (no slashes, or just a code), return it directly
+  if (!trimmed.includes("/") && !trimmed.includes(".")) {
+    return trimmed;
+  }
+  
+  // Last resort fallback for raw base64url typical keys (28-60 chars)
+  const fallbackRegex = /\b([a-zA-Z0-9-_]{28,60})\b/;
+  const fallbackMatch = trimmed.match(fallbackRegex);
+  if (fallbackMatch && fallbackMatch[1]) {
+    return fallbackMatch[1];
+  }
+
+  return trimmed;
+}
+
 interface ImageConfigModalProps {
   currentConfig: ImageConfig;
   onSave: (config: ImageConfig) => Promise<void>;
@@ -50,13 +98,15 @@ export default function ImageConfigModal({
     if (e) e.preventDefault();
     setIsSaving(true);
     setError(null);
+    const extractedId = extractGoogleDriveId(spreadsheetId.trim());
     try {
       await onSave({
         baseUrl: baseUrl.trim(),
         matchField,
         extension,
-        spreadsheetId: spreadsheetId.trim(),
+        spreadsheetId: extractedId,
       });
+      setSpreadsheetId(extractedId);
       // Clear states if saved from "images" tab, or keep modal open if the user wants to keep configuring
       if (activeTab === "images") {
         onClose();
@@ -342,8 +392,8 @@ export default function ImageConfigModal({
                       Salvar ID
                     </button>
                   </div>
-                  <span className="text-[10px] font-semibold text-slate-400 block pt-0.5">
-                    Este ID define a origem de dados padrão para as atualizações em nuvem.
+                  <span className="text-[10px] font-semibold text-slate-400 block pt-0.5 leading-normal">
+                    Este ID define a origem de dados. Você pode colar o <strong>link completo da planilha do Google Sheets</strong> (ou o link de compartilhamento) e nós extrairemos o ID correto automaticamente ao salvar!
                   </span>
                 </div>
 
